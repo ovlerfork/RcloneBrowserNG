@@ -1,0 +1,105 @@
+From 1c6b0cb10575f3895b35524805a305915a573ec1 Mon Sep 17 00:00:00 2001
+From: Ovler <44089074+Ovler-Young@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 06:41:57 +0000
+Subject: [PATCH] Reject invalid POSIX mount folders before launching rclone
+
+Require an existing directory at the shared mount entry point so initial mounts, restored mounts, and remounts reject missing folders before backend probing or job creation. Keep Windows mount destination semantics unchanged.
+---
+ src/main_window.cpp                | 11 ++++++++
+ tests/accessibility_smoke_test.cpp | 42 ++++++++++++++++++++++++++++++
+ 2 files changed, 53 insertions(+)
+
+diff --git a/src/main_window.cpp b/src/main_window.cpp
+index 29b7c5d..f2804d5 100644
+--- a/src/main_window.cpp
++++ b/src/main_window.cpp
+@@ -4631,6 +4631,17 @@ void MainWindow::addMount(const QString &remote, const QString &folder) {
+ 
+ void MainWindow::startMount(const QString &remote, const QString &folder,
+                             bool keepMounted, int restartAttempt) {
++#if !defined(Q_OS_WIN32)
++  if (!QFileInfo(folder).isDir()) {
++    QMessageBox::warning(
++        this, "Invalid mount folder",
++        QString("The mount folder does not exist or is not a directory:\n%1\n\n"
++                "Create or select an existing empty folder, then try again.")
++            .arg(folder));
++    return;
++  }
++#endif
++
+   auto settings = GetSettings();
+   const MountOptionState mountState = LoadMountOptionState(*settings);
+   const bool driveShared = settings->value("Settings/driveShared").toBool();
+diff --git a/tests/accessibility_smoke_test.cpp b/tests/accessibility_smoke_test.cpp
+index 98d1acb..bdff9a9 100644
+--- a/tests/accessibility_smoke_test.cpp
++++ b/tests/accessibility_smoke_test.cpp
+@@ -2,6 +2,7 @@
+ #include "folder_compare.h"
+ #include "interface_polish.h"
+ #include "main_window.h"
++#include "mount_widget.h"
+ #include "preferences_dialog.h"
+ #include "schedule_dialog.h"
+ #include "transfer_dialog.h"
+@@ -10,8 +11,12 @@
+ #include <QAbstractItemView>
+ #include <QApplication>
+ #include <QLineEdit>
++#include <QMessageBox>
+ #include <QStandardPaths>
++#include <QTemporaryDir>
++#include <QTemporaryFile>
+ #include <QTest>
++#include <QTimer>
+ 
+ class AccessibilitySmokeTest : public QObject {
+   Q_OBJECT
+@@ -102,6 +107,43 @@ private slots:
+     window.close();
+   }
+ 
++#if !defined(Q_OS_WIN32)
++  void invalidMountFolder_data() {
++    QTest::addColumn<bool>("regularFile");
++    QTest::newRow("missing-directory") << false;
++    QTest::newRow("regular-file") << true;
++  }
++
++  void invalidMountFolder() {
++    QFETCH(bool, regularFile);
++    QTemporaryDir directory;
++    QVERIFY(directory.isValid());
++    QTemporaryFile file(directory.filePath("mount-XXXXXX"));
++    QString folder = directory.filePath("missing");
++    if (regularFile) {
++      QVERIFY(file.open());
++      folder = file.fileName();
++    }
++
++    MainWindow window(false);
++    const int mountCount = window.findChildren<MountWidget *>().size();
++    QString warning;
++    QTimer::singleShot(0, &window, [&]() {
++      if (auto *box = qobject_cast<QMessageBox *>(
++              QApplication::activeModalWidget())) {
++        warning = box->text();
++        box->accept();
++      }
++    });
++    QVERIFY(QMetaObject::invokeMethod(&window, "addMount", Qt::DirectConnection,
++                                     Q_ARG(QString, "remote:"),
++                                     Q_ARG(QString, folder)));
++    QVERIFY(warning.contains(folder));
++    QVERIFY(warning.contains("existing empty folder"));
++    QCOMPARE(window.findChildren<MountWidget *>().size(), mountCount);
++  }
++#endif
++
+   void transferDialogControls() {
+     TransferDialog dialog(false, false, "remote", QDir(), true);
+     verifySurface(&dialog,
+-- 
+2.43.0
+
