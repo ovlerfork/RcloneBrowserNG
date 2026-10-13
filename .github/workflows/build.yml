@@ -21,7 +21,7 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Materialize source
@@ -53,7 +53,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir .build/source/build --output-on-failure --parallel 3
       - name: Upload macOS build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: RcloneBrowserNG-macos-${{ matrix.arch }}-${{ github.sha }}
           path: |
@@ -77,13 +77,13 @@ jobs:
     env:
       IMAGE: rclonebrowserng:${{ github.sha }}-${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Materialize source
         run: python3 scripts/materialize.py .build/source
       - name: Set up Docker build
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4.4.1
       - name: Build native image and run source tests
         env:
           EXPECTED_MACHINE: ${{ matrix.machine }}
@@ -166,7 +166,7 @@ jobs:
       - name: Export Docker-loadable image
         run: docker save "$IMAGE" | gzip -1 > .build/docker/RcloneBrowserNG-docker-${{ matrix.arch }}.tar.gz
       - name: Upload Docker build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: RcloneBrowserNG-docker-${{ matrix.arch }}-${{ github.sha }}
           path: .build/docker/*.tar.gz
@@ -175,7 +175,7 @@ jobs:
           retention-days: 7
       - name: Upload GUI smoke evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: RcloneBrowserNG-docker-smoke-${{ matrix.arch }}-${{ github.sha }}
           path: |
@@ -190,7 +190,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           pattern: RcloneBrowserNG-macos-*
           path: release
