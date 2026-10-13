@@ -1,16 +1,18 @@
-From 57f79245728b4c03a676c4e533d5c73ef426af93 Mon Sep 17 00:00:00 2001
+From 03244a4ac979c7a71d18606ae46fd377bc0de754 Mon Sep 17 00:00:00 2001
 From: Ovler <44089074+Ovler-Young@users.noreply.github.com>
 Date: Tue, 13 Oct 2026 05:37:13 +0000
 Subject: [PATCH 3/3] Fix platform build and test portability
 
 ---
  CMakeLists.txt           |  2 ++
+ src/app_log.cpp          | 11 +++++------
  src/item_model.cpp       |  5 +++--
  src/main_window.cpp      | 17 ++++-------------
  src/schedule_manager.cpp |  1 +
+ src/transfer_dialog.cpp  |  2 +-
  src/utils.cpp            |  6 ++++++
  tests/app_log_test.cpp   | 13 ++++++++++---
- 6 files changed, 26 insertions(+), 18 deletions(-)
+ 8 files changed, 32 insertions(+), 25 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 55366c2..5976f8d 100644
@@ -25,6 +27,46 @@ index 55366c2..5976f8d 100644
  
    add_executable(preferences_layout_test
      tests/preferences_layout_test.cpp
+diff --git a/src/app_log.cpp b/src/app_log.cpp
+index 1ffb114..aa8fb2a 100644
+--- a/src/app_log.cpp
++++ b/src/app_log.cpp
+@@ -31,10 +31,10 @@ QFile &logFile() {
+ }
+ 
+ // Callers already hold the mutex.
+-void rotateIfNeededLocked() {
++bool rotateIfNeededLocked() {
+   QFile &file = logFile();
+   if (file.isOpen() && file.size() < kMaxBytes) {
+-    return;
++    return true;
+   }
+   if (file.isOpen()) {
+     file.close();
+@@ -57,7 +57,7 @@ void rotateIfNeededLocked() {
+   }
+ 
+   file.setFileName(base);
+-  file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
++  return file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+ }
+ 
+ QString levelTag(Level level) {
+@@ -175,11 +175,10 @@ void Write(Level level, const QString &source, const QString &message) {
+     return;
+   }
+ 
+-  rotateIfNeededLocked();
+-  QFile &file = logFile();
+-  if (!file.isOpen()) {
++  if (!rotateIfNeededLocked()) {
+     return;
+   }
++  QFile &file = logFile();
+ 
+   // Same redaction the support bundle uses, so a log a user attaches to a
+   // bug report cannot carry their rclone credentials.
 diff --git a/src/item_model.cpp b/src/item_model.cpp
 index c09a8d5..e63e427 100644
 --- a/src/item_model.cpp
@@ -102,6 +144,19 @@ index 9b94ddb..b393753 100644
    const QString sysName = scheduleTaskName(taskName);
  
  #if defined(Q_OS_WIN32)
+diff --git a/src/transfer_dialog.cpp b/src/transfer_dialog.cpp
+index 01b4b72..c114acb 100644
+--- a/src/transfer_dialog.cpp
++++ b/src/transfer_dialog.cpp
+@@ -442,7 +442,7 @@ TransferDialog::TransferDialog(bool isDownload, bool isDrop,
+                    });
+ 
+   QObject::connect(profileDeleteBtn, &QPushButton::clicked, this,
+-                   [this, profileCombo]() {
++                   [profileCombo]() {
+                      QString name = profileCombo->currentText();
+                      if (name.isEmpty() || profileCombo->currentIndex() <= 0)
+                        return;
 diff --git a/src/utils.cpp b/src/utils.cpp
 index 8876801..ea657ee 100644
 --- a/src/utils.cpp
