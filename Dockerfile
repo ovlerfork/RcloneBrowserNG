@@ -39,7 +39,7 @@ RUN add-pkg ca-certificates fonts-dejavu-core xterm libgl1 libegl1 libopengl0 \
       libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
       libxcb-keysyms1 libxcb-render-util0 libxcb-randr0 libxcb-shape0 \
       libxcb-xfixes0 libxcb-xinerama0 libxcb-sync1 libxcb-xkb1 libsm6 libice6 \
-      libxrender1 libxi6 libssl3t64 \
+      libxrender1 libxi6 libssl3t64 libgssapi-krb5-2 \
     && set-cont-env APP_NAME 'Rclone Browser NG' \
     && mkdir -p /media
 COPY --from=builder /usr/local/bin/rclone-browser /usr/local/bin/qt.conf /usr/local/bin/
