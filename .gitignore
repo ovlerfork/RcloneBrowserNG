@@ -1,6 +1,8 @@
 .build/
 build/
 release/
+config/
+media/
 __pycache__/
 *.pyc
 .DS_Store

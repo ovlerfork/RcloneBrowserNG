@@ -1,0 +1,13 @@
+services:
+  rclonebrowserng:
+    image: rclonebrowserng:local
+    build: .
+    ports:
+      - "${WEB_PORT:-5800}:5800"
+    environment:
+      USER_ID: "${USER_ID:-1000}"
+      GROUP_ID: "${GROUP_ID:-1000}"
+      TZ: "${TZ:-Etc/UTC}"
+    volumes:
+      - "${CONFIG_DIR:-./config}:/config"
+      - "${MEDIA_DIR:-./media}:/media"
