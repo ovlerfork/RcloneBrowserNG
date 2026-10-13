@@ -7,7 +7,7 @@ ARG QT_VERSION=6.12.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake ninja-build python3-venv ca-certificates \
-      libgl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libdbus-1-dev \
+      libgl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libdbus-1-dev libglib2.0-0t64 \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/aqt \
     && /opt/aqt/bin/pip install --no-cache-dir aqtinstall==3.3.0
