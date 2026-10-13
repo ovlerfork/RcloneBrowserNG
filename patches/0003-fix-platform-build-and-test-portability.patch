@@ -1,15 +1,30 @@
-From c5f045ad6a985a530b81e3caf37ccb69be94a1d9 Mon Sep 17 00:00:00 2001
+From 57f79245728b4c03a676c4e533d5c73ef426af93 Mon Sep 17 00:00:00 2001
 From: Ovler <44089074+Ovler-Young@users.noreply.github.com>
-Date: Tue, 13 Oct 2026 05:11:55 +0000
-Subject: [PATCH 3/3] Fix platform release compiler portability
+Date: Tue, 13 Oct 2026 05:37:13 +0000
+Subject: [PATCH 3/3] Fix platform build and test portability
 
 ---
+ CMakeLists.txt           |  2 ++
  src/item_model.cpp       |  5 +++--
  src/main_window.cpp      | 17 ++++-------------
  src/schedule_manager.cpp |  1 +
  src/utils.cpp            |  6 ++++++
- 4 files changed, 14 insertions(+), 15 deletions(-)
+ tests/app_log_test.cpp   | 13 ++++++++++---
+ 6 files changed, 26 insertions(+), 18 deletions(-)
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 55366c2..5976f8d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -327,6 +327,8 @@ if(BUILD_TESTING)
+   target_include_directories(rc_auth_regression_test PRIVATE src)
+   target_link_libraries(rc_auth_regression_test Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Test)
+   add_test(NAME rc_auth_regression_test COMMAND rc_auth_regression_test)
++  set_tests_properties(rc_auth_regression_test PROPERTIES
++    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+ 
+   add_executable(preferences_layout_test
+     tests/preferences_layout_test.cpp
 diff --git a/src/item_model.cpp b/src/item_model.cpp
 index c09a8d5..e63e427 100644
 --- a/src/item_model.cpp
@@ -125,3 +140,27 @@ index 8876801..ea657ee 100644
  QString passwordCommandValue() {
    QString exe = QDir::toNativeSeparators(
        QDir(qApp->applicationDirPath()).filePath("RcloneBrowserPassword.exe"));
+diff --git a/tests/app_log_test.cpp b/tests/app_log_test.cpp
+index ddc8e12..89f4272 100644
+--- a/tests/app_log_test.cpp
++++ b/tests/app_log_test.cpp
+@@ -38,9 +38,16 @@ private slots:
+   }
+ 
+   void init() {
+-    // Each case starts from an empty log directory.
+-    QDir(AppLog::LogDirectory()).removeRecursively();
+-    QDir().mkpath(AppLog::LogDirectory());
++    // Keep the live log file in place while the logger's handle is open.
++    AppLog::Flush();
++    const QString base = AppLog::LogFilePath();
++    QFile file(base);
++    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
++    file.close();
++    for (int i = 1; i <= AppLog::Generations(); ++i) {
++      QFile::remove(QString("%1.%2").arg(base).arg(i));
++    }
++    AppLog::SetLevel(AppLog::Level::Info);
+   }
+ 
+   void writesTimestampedLinesWithSourceAndLevel() {
