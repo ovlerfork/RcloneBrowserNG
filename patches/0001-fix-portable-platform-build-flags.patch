@@ -1,7 +1,7 @@
-From 24b1675f1e9ae89ca53550b39a49cca504b161f2 Mon Sep 17 00:00:00 2001
+From add98628bc0aacc8de77c83f6759523109f4125d Mon Sep 17 00:00:00 2001
 From: Ovler <44089074+Ovler-Young@users.noreply.github.com>
 Date: Tue, 13 Oct 2026 04:20:03 +0000
-Subject: [PATCH 1/2] Fix portable platform build flags
+Subject: [PATCH 1/3] Fix portable platform build flags
 
 ---
  src/CMakeLists.txt | 15 ++++++++++++---

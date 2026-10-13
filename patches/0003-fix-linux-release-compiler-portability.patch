@@ -1,0 +1,90 @@
+From ee6a781a88ab5d79650c8fb103da4ea795bdcb77 Mon Sep 17 00:00:00 2001
+From: Ovler <44089074+Ovler-Young@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 04:50:51 +0000
+Subject: [PATCH 3/3] Fix Linux release compiler portability
+
+---
+ src/item_model.cpp       | 5 +++--
+ src/main_window.cpp      | 1 +
+ src/schedule_manager.cpp | 1 +
+ src/utils.cpp            | 6 ++++++
+ 4 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/src/item_model.cpp b/src/item_model.cpp
+index c09a8d5..e63e427 100644
+--- a/src/item_model.cpp
++++ b/src/item_model.cpp
+@@ -72,8 +72,9 @@ private:
+ 
+ ItemModel::ItemModel(IconCache *icons, const QString &remote, bool googlePhotos,
+                      QObject *parent)
+-    : QAbstractItemModel(parent), mRemote(remote), mGooglePhotos(googlePhotos),
+-      mFixedFont(QFontDatabase::systemFont(QFontDatabase::FixedFont)) {
++    : QAbstractItemModel(parent), mRemote(remote),
++      mFixedFont(QFontDatabase::systemFont(QFontDatabase::FixedFont)),
++      mGooglePhotos(googlePhotos) {
+   QStyle *style = qApp->style();
+   mDriveIcon = style->standardIcon(QStyle::SP_DriveNetIcon);
+   mFolderIcon = style->standardIcon(QStyle::SP_DirIcon);
+diff --git a/src/main_window.cpp b/src/main_window.cpp
+index 1e5b7de..4c7d122 100644
+--- a/src/main_window.cpp
++++ b/src/main_window.cpp
+@@ -2508,6 +2508,7 @@ QString MainWindow::terminalRcloneConfigCommand(const QStringList &args) const {
+ bool MainWindow::startDetachedTerminalCommand(const QStringList &args,
+                                               const QDateTime &configBefore,
+                                               const QString &errorTitle) {
++  Q_UNUSED(errorTitle)
+   const QStringList fullArgs = GetRcloneConf() + args;
+ 
+   QProcess *p = new QProcess(this);
+diff --git a/src/schedule_manager.cpp b/src/schedule_manager.cpp
+index 9b94ddb..b393753 100644
+--- a/src/schedule_manager.cpp
++++ b/src/schedule_manager.cpp
+@@ -407,6 +407,7 @@ bool ScheduleManager::installSchedule(const QString &taskName,
+ }
+ 
+ bool ScheduleManager::removeSchedule(const QString &taskName, QString *error) {
++  Q_UNUSED(error)
+   const QString sysName = scheduleTaskName(taskName);
+ 
+ #if defined(Q_OS_WIN32)
+diff --git a/src/utils.cpp b/src/utils.cpp
+index 8876801..ea657ee 100644
+--- a/src/utils.cpp
++++ b/src/utils.cpp
+@@ -12,6 +12,7 @@ namespace {
+ const char *kUsePasswordCommandKey = "Settings/usePasswordCommand";
+ const char *kPasswordCommandArg = "--rclone-config-password-command";
+ 
++#if defined(Q_OS_WIN32)
+ QString configuredRcloneConf() {
+   if (!gRcloneConf.isEmpty()) {
+     return gRcloneConf;
+@@ -20,6 +21,8 @@ QString configuredRcloneConf() {
+   return settings->value("Settings/rcloneConf").toString();
+ }
+ 
++#endif
++
+ QString resolveRcloneConfPath(QString conf) {
+   if (conf.isEmpty()) {
+     return conf;
+@@ -48,6 +51,7 @@ QString resolveRcloneConfPath(QString conf) {
+   return conf;
+ }
+ 
++#if defined(Q_OS_WIN32)
+ QString credentialTarget() {
+   QString source = configuredRcloneConf().trimmed();
+   if (source.isEmpty()) {
+@@ -65,6 +69,8 @@ QString credentialTarget() {
+          QString::fromLatin1(digest);
+ }
+ 
++#endif
++
+ QString passwordCommandValue() {
+   QString exe = QDir::toNativeSeparators(
+       QDir(qApp->applicationDirPath()).filePath("RcloneBrowserPassword.exe"));

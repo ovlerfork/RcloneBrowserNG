@@ -76,9 +76,11 @@ jobs:
           pin['commit'] = os.environ['UPSTREAM_REVISION']
           path.write_text(json.dumps(pin, indent=2) + '\n')
           PY
+            python3 scripts/refresh-patches.py .build/source
+            git add -- upstream.json patches
             git -c user.name='github-actions[bot]' \
               -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit -m "Update upstream to $UPSTREAM_REVISION" -- upstream.json
+              commit -m "Update upstream to $UPSTREAM_REVISION" -- upstream.json patches
             git push origin "$update_branch"
           fi
           gh pr create --head "$update_branch" --base "$DEFAULT_BRANCH" \

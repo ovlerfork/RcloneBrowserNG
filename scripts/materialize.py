@@ -33,6 +33,8 @@ def main() -> int:
 
         git("init", "--quiet")
         git("remote", "add", "origin", pin["repository"])
+        if revision != pin["commit"]:
+            git("fetch", "--depth", "1", "origin", pin["commit"])
         git("fetch", "--depth", "1", "origin", revision)
         git("checkout", "--detach", "FETCH_HEAD")
         if git("rev-parse", "HEAD") != revision:
