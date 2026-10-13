@@ -1,14 +1,14 @@
-From 0352bbe8ecd87a391dae160cf09d47fd7ae8bc20 Mon Sep 17 00:00:00 2001
+From c5f045ad6a985a530b81e3caf37ccb69be94a1d9 Mon Sep 17 00:00:00 2001
 From: Ovler <44089074+Ovler-Young@users.noreply.github.com>
 Date: Tue, 13 Oct 2026 05:11:55 +0000
 Subject: [PATCH 3/3] Fix platform release compiler portability
 
 ---
  src/item_model.cpp       |  5 +++--
- src/main_window.cpp      | 13 +------------
+ src/main_window.cpp      | 17 ++++-------------
  src/schedule_manager.cpp |  1 +
  src/utils.cpp            |  6 ++++++
- 4 files changed, 11 insertions(+), 14 deletions(-)
+ 4 files changed, 14 insertions(+), 15 deletions(-)
 
 diff --git a/src/item_model.cpp b/src/item_model.cpp
 index c09a8d5..e63e427 100644
@@ -27,10 +27,28 @@ index c09a8d5..e63e427 100644
    mDriveIcon = style->standardIcon(QStyle::SP_DriveNetIcon);
    mFolderIcon = style->standardIcon(QStyle::SP_DirIcon);
 diff --git a/src/main_window.cpp b/src/main_window.cpp
-index 1e5b7de..4dec329 100644
+index 1e5b7de..29b7c5d 100644
 --- a/src/main_window.cpp
 +++ b/src/main_window.cpp
-@@ -1711,18 +1711,6 @@ MainWindow::MainWindow(bool initializeRuntime)
+@@ -137,7 +137,8 @@ void setStagedTransferItem(QListWidgetItem *item,
+ 
+ } // namespace
+ 
+-// Fusion-based dark theme used on Windows, Linux and older macOS.
++#if !defined(Q_OS_MACOS)
++// Fusion-based dark theme used on Windows and Linux.
+ // Includes Disabled and PlaceholderText roles so secondary states
+ // stay readable in dark mode.
+ static void applyDarkTheme() {
+@@ -172,6 +173,7 @@ static void applyDarkTheme() {
+ 
+   UiPolish::ApplyApplicationStyle(true);
+ }
++#endif
+ 
+ MainWindow::MainWindow(bool initializeRuntime)
+     : mInitializeRuntime(initializeRuntime) {
+@@ -1711,18 +1713,6 @@ MainWindow::MainWindow(bool initializeRuntime)
                           &QDialog::reject);
          layout->addWidget(buttons);
          dlg.installEventFilter(new QObject(&dlg));
@@ -49,7 +67,7 @@ index 1e5b7de..4dec329 100644
          list->viewport()->installEventFilter(list);
          if (dlg.exec() == QDialog::Accepted) {
            QStringList result;
-@@ -2508,6 +2496,7 @@ QString MainWindow::terminalRcloneConfigCommand(const QStringList &args) const {
+@@ -2508,6 +2498,7 @@ QString MainWindow::terminalRcloneConfigCommand(const QStringList &args) const {
  bool MainWindow::startDetachedTerminalCommand(const QStringList &args,
                                                const QDateTime &configBefore,
                                                const QString &errorTitle) {

@@ -1,14 +1,14 @@
-From 2eb44d6fe3063eedd07d77887942be3fad2c1b50 Mon Sep 17 00:00:00 2001
+From e303980c4727758b13931e56a456197f32bc0b0a Mon Sep 17 00:00:00 2001
 From: Ovler <44089074+Ovler-Young@users.noreply.github.com>
 Date: Tue, 13 Oct 2026 04:50:51 +0000
 Subject: [PATCH 2/3] Fix macOS release packaging
 
 ---
  CMakeLists.txt                    |  6 ++++
- scripts/release_macOS.sh          | 39 ++++++++++++---------
+ scripts/release_macOS.sh          | 40 ++++++++++++---------
  scripts/smoke_package.py          | 52 ++++++++++++++++++++++++++-
  tests/macos_package_smoke_test.py | 58 +++++++++++++++++++++++++++++++
- 4 files changed, 137 insertions(+), 18 deletions(-)
+ 4 files changed, 138 insertions(+), 18 deletions(-)
  create mode 100644 tests/macos_package_smoke_test.py
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -29,7 +29,7 @@ index 9fd09cc..55366c2 100644
      tests/export_list_writer_test.cpp
      src/export_list_writer.cpp
 diff --git a/scripts/release_macOS.sh b/scripts/release_macOS.sh
-index 62b2e12..8cbc3a3 100755
+index 62b2e12..fa09a59 100755
 --- a/scripts/release_macOS.sh
 +++ b/scripts/release_macOS.sh
 @@ -1,26 +1,31 @@
@@ -70,7 +70,7 @@ index 62b2e12..8cbc3a3 100755
  if [ -z "$QT_PREFIX" ] || [ ! -d "$QT_PREFIX" ]; then
    echo "ERROR: Qt 6 not found. Install with: brew install qt@6"
    exit 1
-@@ -58,7 +63,9 @@ mkdir -p "$BUILD" "$RELEASE"
+@@ -58,7 +63,10 @@ mkdir -p "$BUILD" "$RELEASE"
  
  # Build
  cd "$BUILD"
@@ -78,10 +78,11 @@ index 62b2e12..8cbc3a3 100755
 +cmake "$ROOT" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
 +  -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
 +  -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.4}"
++cmake --build . --target rclone-browser --parallel "$JOBS"
  cmake --build . --parallel "$JOBS"
  
  APP="$BUILD/build/rclone-browser.app"
-@@ -74,24 +81,22 @@ if [ -f "$QT_PREFIX/plugins/platforms/libqoffscreen.dylib" ]; then
+@@ -74,24 +82,22 @@ if [ -f "$QT_PREFIX/plugins/platforms/libqoffscreen.dylib" ]; then
  fi
  
  # Deploy Qt frameworks and create DMG
