@@ -1,0 +1,87 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Materialize source
+        run: python3 scripts/materialize.py .build/source
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.12.0'
+          host: mac
+          target: desktop
+          arch: clang_64
+          cache: true
+      - name: Build DMG and application ZIP
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          MACOSX_DEPLOYMENT_TARGET: '14.4'
+        run: |
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          export QT_PREFIX="$QT_ROOT_DIR"
+          env -u QT_PLUGIN_PATH -u QML2_IMPORT_PATH -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH \
+            bash .build/source/scripts/release_macOS.sh
+          binary=.build/source/build/build/rclone-browser.app/Contents/MacOS/rclone-browser
+          file "$binary"
+          test "$(lipo -archs "$binary")" = "$EXPECTED_ARCH"
+          otool -L "$binary"
+          codesign --verify --deep --strict .build/source/build/build/rclone-browser.app
+      - name: Run source and package tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir .build/source/build --output-on-failure --parallel 3
+      - name: Upload macOS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: RcloneBrowserNG-macos-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            .build/source/release/*.dmg
+            .build/source/release/*.app.zip
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: macos
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RcloneBrowserNG-macos-*
+          path: release
+          merge-multiple: true
+      - name: Publish verified macOS packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release/*.dmg release/*.app.zip --clobber
+          else
+            gh release create "$RELEASE_TAG" release/*.dmg release/*.app.zip --verify-tag \
+              --title "$RELEASE_TAG" --notes "macOS 14.4 or newer. Native Apple Silicon and Intel packages; ad-hoc signed."
+          fi

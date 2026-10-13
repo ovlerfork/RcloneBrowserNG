@@ -1,30 +1,9 @@
-.DS_Store
-/build*/
+.build/
 build/
-*.user*
-scripts/*.zip
-scripts/*.png
-obj-*-linux-gnu
-debian/files
-debian/debhelper-build-stamp
-debian/rclone-browser*
-/release
-/bs0.cmd
-/src/*.autosave
-CLAUDE.md
-AGENTS.md
-CODEX_CHANGELOG.md
-ROADMAP.md
-RESEARCH.md
-Roadmap_Blocked.md
-.claude/
-
-# AI config
-.codex/
-.ai/
-PROJECT_CONTEXT.md
-CONTINUATION_PROMPT.md
-
-# Python bytecode
+release/
 __pycache__/
 *.pyc
+.DS_Store
+AGENTS.md
+.claude/
+.codex/

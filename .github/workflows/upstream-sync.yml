@@ -1,0 +1,94 @@
+name: Propose upstream update
+
+on:
+  schedule:
+    - cron: '21 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Resolve upstream revision
+        id: upstream
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          pin = json.loads(Path('upstream.json').read_text())
+          remote = subprocess.check_output(
+              ['git', 'ls-remote', pin['repository'], 'refs/heads/' + pin['branch']], text=True)
+          revision = remote.split()[0]
+          if not re.fullmatch(r'[0-9a-f]{40}', revision):
+              raise ValueError('upstream did not return a full commit SHA')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'revision={revision}\nchanged={str(revision != pin["commit"]).lower()}\n')
+          PY
+      - name: Replay patches and check source helpers
+        if: steps.upstream.outputs.changed == 'true'
+        shell: bash
+        env:
+          UPSTREAM_REVISION: ${{ steps.upstream.outputs.revision }}
+        run: |
+          mkdir -p .build
+          python3 scripts/materialize.py .build/source --revision "$UPSTREAM_REVISION" \
+            2>&1 | tee .build/upstream-replay.log
+          bash -n .build/source/scripts/release_macOS.sh
+          python3 -m py_compile .build/source/scripts/smoke_package.py
+          python3 .build/source/scripts/validate_qt_version.py --version 6.12.0
+      - name: Propose pin update and dispatch build
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          UPSTREAM_REVISION: ${{ steps.upstream.outputs.revision }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          update_branch="sync/upstream-${UPSTREAM_REVISION:0:12}"
+          if [ "$(gh pr list --head "$update_branch" --base "$DEFAULT_BRANCH" --state open --json number --jq length)" != 0 ]; then
+            if [ "$(gh run list --workflow build.yml --branch "$update_branch" --limit 1 --json databaseId --jq length)" = 0 ]; then
+              gh workflow run build.yml --ref "$update_branch"
+            fi
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$update_branch" >/dev/null; then
+            git fetch origin "$update_branch"
+            git checkout --detach FETCH_HEAD
+          else
+            git checkout -b "$update_branch"
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path('upstream.json')
+          pin = json.loads(path.read_text())
+          pin['commit'] = os.environ['UPSTREAM_REVISION']
+          path.write_text(json.dumps(pin, indent=2) + '\n')
+          PY
+            git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "Update upstream to $UPSTREAM_REVISION" -- upstream.json
+            git push origin "$update_branch"
+          fi
+          gh pr create --head "$update_branch" --base "$DEFAULT_BRANCH" \
+            --title "Update upstream to ${UPSTREAM_REVISION:0:12}" \
+            --body "Advance the upstream pin to $UPSTREAM_REVISION. The patch series replayed successfully; the build workflow is explicitly dispatched for this proposal."
+          gh workflow run build.yml --ref "$update_branch"
+      - name: Upload upstream replay diagnostics
+        if: always() && steps.upstream.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-replay-${{ steps.upstream.outputs.revision }}
+          path: .build/upstream-replay.log
+          if-no-files-found: warn
