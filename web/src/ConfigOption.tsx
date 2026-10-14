@@ -24,6 +24,11 @@ export interface Provider {
 }
 export const defaultValue = (option: RcloneOption) =>
   option.DefaultStr ?? (option.Default == null ? "" : String(option.Default));
+const booleanValue = (value: string) => {
+  if (["1", "t", "T", "TRUE", "true", "True"].includes(value)) return "true";
+  if (["0", "f", "F", "FALSE", "false", "False"].includes(value)) return "false";
+  return value;
+};
 export function matchesProvider(rule: string | undefined, provider: string) {
   if (!rule || !provider) return true;
   const exclude = rule.startsWith("!");
@@ -57,6 +62,16 @@ export function OptionInput({
     option.Examples?.filter((example) =>
       matchesProvider(example.Provider, provider),
     ) ?? [];
+  const choices =
+    option.Type === "bool"
+      ? ["true", "false"].map((value) => ({
+          Value: value,
+          Help:
+            examples.find((example) => booleanValue(example.Value) === value)
+              ?.Help || (value === "true" ? "Yes" : "No"),
+        }))
+      : examples;
+  const selectedValue = option.Type === "bool" ? booleanValue(value) : value;
   const common = {
     id,
     "aria-label": option.Name,
@@ -74,18 +89,13 @@ export function OptionInput({
         {required && <span className="required">Required</span>}
       </label>
       {!secret && (option.Exclusive || option.Type === "bool") ? (
-        <select {...common}>
+        <select {...common} value={selectedValue}>
           <option value="">{placeholder || "Not set"}</option>
-          {value &&
-            !examples.some((example) => example.Value === value) &&
-            option.Type !== "bool" && <option value={value}>{value}</option>}
-          {(option.Type === "bool" && !examples.length
-            ? [
-                { Value: "true", Help: "Yes" },
-                { Value: "false", Help: "No" },
-              ]
-            : examples
-          ).map((example, index) => (
+          {selectedValue &&
+            !choices.some((example) => example.Value === selectedValue) && (
+              <option value={value}>{value}</option>
+            )}
+          {choices.map((example, index) => (
             <option key={`${example.Value}-${index}`} value={example.Value}>
               {example.Value}
               {example.Help ? ` · ${example.Help.split("\n")[0]}` : ""}
