@@ -120,14 +120,15 @@ async fn real_rclone_copy_sync_move_and_bisync_preserve_their_file_semantics() {
     );
     assert!(moved.join("from-source.txt").exists());
     assert!(source.join("from-destination.txt").exists());
-    let listed: serde_json::Value = serde_json::from_slice(
-        &service
-            .output(&["lsjson", source.to_str().unwrap()])
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(listed.as_array().unwrap().len(), 3);
+    let listed = service
+        .rc
+        .connection(&service.config)
+        .await
+        .unwrap()
+        .call("operations/list", json!({"fs":source,"remote":""}))
+        .await
+        .unwrap();
+    assert_eq!(listed["list"].as_array().unwrap().len(), 3);
     service.shutdown.cancel();
     for worker in workers {
         worker.await.unwrap();
@@ -240,4 +241,295 @@ async fn real_rclone_cancellation_and_shutdown_reap_running_transfers() {
         service.store.run(&run.id).unwrap().unwrap().status,
         RunStatus::Interrupted
     );
+}
+
+async fn api_request(
+    service: &Arc<Service>,
+    method: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = rclone_browser_ng::api::router(service.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    if path.starts_with("/api/config/") {
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
+    let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+        .await
+        .unwrap();
+    (
+        status,
+        if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        },
+    )
+}
+
+#[tokio::test]
+#[ignore = "requires rclone 1.75.2 or newer"]
+async fn config_edit_preserves_secrets_and_rejects_duplicate_create() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let secret = "long plaintext password containing many letters and numbers 12345";
+    let (status, value) = api_request(&service, "POST", "/api/config/remotes", json!({"name":"ssh","type":"sftp","parameters":{"host":"localhost","pass":secret,"custom_key":"private custom value"}})).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["complete"], true);
+    let rc = service.rc.connection(&service.config).await.unwrap();
+    let before = rc.call("config/get", json!({"name":"ssh"})).await.unwrap();
+    assert_ne!(before["pass"], secret);
+    let (_, shown) = api_request(&service, "GET", "/api/config/remotes/ssh", json!(null)).await;
+    assert!(
+        shown["secrets"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("host"))
+    );
+    assert_eq!(shown["parameters"]["pass"], serde_json::Value::Null);
+    assert!(
+        shown["secrets"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("pass"))
+    );
+    assert!(
+        shown["secrets"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("custom_key"))
+    );
+    assert!(!shown.to_string().contains("private custom value"));
+    let (status, _) = api_request(
+        &service,
+        "POST",
+        "/api/config/remotes",
+        json!({"name":"ssh","type":"local","parameters":{}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = api_request(
+        &service,
+        "PUT",
+        "/api/config/remotes/ssh",
+        json!({"parameters":{"host":"new.example"},"unset":["custom_key"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let after = rc.call("config/get", json!({"name":"ssh"})).await.unwrap();
+    assert_eq!(after["pass"], before["pass"]);
+    assert_eq!(after["host"], "new.example");
+    assert!(after.get("custom_key").is_none());
+    let guard = service.file_gate.lock().await;
+    assert_eq!(
+        api_request(
+            &service,
+            "PUT",
+            "/api/config/remotes/ssh",
+            json!({"parameters":{"host":"busy"}})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    drop(guard);
+    assert_eq!(
+        api_request(&service, "DELETE", "/api/config/remotes/ssh", json!(null))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        api_request(&service, "GET", "/api/config/remotes/ssh", json!(null))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    service.rc.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires rclone 1.75.2 or newer"]
+async fn oauth_wizard_binds_state_and_returns_headless_authorization_prompt() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let (status, mut wizard) = api_request(
+        &service,
+        "POST",
+        "/api/config/remotes",
+        json!({"name":"cloud","type":"drive","parameters":{}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{wizard}");
+    assert_eq!(wizard["option"]["Name"], "config_shared_client_id");
+    let session = wizard["session_id"].clone();
+    assert_eq!(
+        api_request(
+            &service,
+            "POST",
+            "/api/config/remotes/disk/continue",
+            json!({"session_id":session,"answer":"true"})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (status, next) = api_request(
+        &service,
+        "POST",
+        "/api/config/remotes/cloud/continue",
+        json!({"session_id":session,"answer":"true"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    wizard = next;
+    assert_eq!(wizard["option"]["Name"], "config_token", "{wizard}");
+    assert!(
+        wizard["option"]["Help"]
+            .as_str()
+            .unwrap()
+            .contains("rclone authorize")
+    );
+    let (_, invalid) = api_request(
+        &service,
+        "POST",
+        "/api/config/remotes/cloud/continue",
+        json!({"session_id":wizard["session_id"],"answer":"invalid sensitive answer"}),
+    )
+    .await;
+    assert!(!invalid.to_string().contains("invalid sensitive answer"));
+    assert_eq!(invalid["complete"], false, "{invalid}");
+    assert!(invalid["error"].is_string(), "{invalid}");
+    assert_eq!(invalid["option"]["Name"], "config_token");
+    assert_eq!(
+        api_request(
+            &service,
+            "POST",
+            "/api/config/remotes/cloud/continue",
+            json!({"session_id":session,"answer":"true"})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    service.rc.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires rclone 1.75.2 or newer"]
+async fn per_job_flags_file_sources_and_daemon_restart_keep_execution_isolated() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let source = dir.path().join("source");
+    let destination = dir.path().join("destination");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("keep.txt"), "kept").unwrap();
+    std::fs::write(source.join("skip.tmp"), "excluded").unwrap();
+    let workers = service.start();
+    let filtered = task(
+        &service,
+        "copy",
+        &source,
+        &destination,
+        json!({"options":{"exclude":["*.tmp"],"transfers":1,"checkers":2,"bandwidth_limit":"10M:10M"}}),
+    );
+    assert_eq!(
+        run(&service, &filtered, false, false).await.status,
+        RunStatus::Succeeded
+    );
+    assert!(destination.join("keep.txt").exists());
+    assert!(!destination.join("skip.tmp").exists());
+    let rc = service.rc.connection(&service.config).await.unwrap();
+    let bandwidth = rc.call("core/bwlimit", json!({})).await.unwrap();
+    assert_eq!(bandwidth["rate"], "off");
+    let (status, listed) = api_request(
+        &service,
+        "GET",
+        &format!("/api/files?path={}", source.display()),
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == source.join("keep.txt").to_str().unwrap())
+    );
+    let file_target = dir.path().join("file-target");
+    let file = task(
+        &service,
+        "copy",
+        &source.join("keep.txt"),
+        &file_target,
+        json!({}),
+    );
+    assert_eq!(
+        run(&service, &file, true, false).await.status,
+        RunStatus::Succeeded
+    );
+    assert!(!file_target.exists());
+    assert_eq!(
+        run(&service, &file, false, false).await.status,
+        RunStatus::Succeeded
+    );
+    assert_eq!(
+        std::fs::read(file_target.join("keep.txt")).unwrap(),
+        b"kept"
+    );
+    let (status,moving)=api_request(&service,"POST","/api/files/move",json!({"source":file_target.join("keep.txt"),"destination":file_target.join("renamed.txt"),"confirmed":true})).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(
+        finished(&service, moving["id"].as_str().unwrap())
+            .await
+            .status,
+        RunStatus::Succeeded
+    );
+    assert!(!file_target.join("keep.txt").exists());
+    assert!(file_target.join("renamed.txt").exists());
+    std::fs::write(source.join("large.bin"), vec![0u8; 1024 * 1024]).unwrap();
+    let slow = task(
+        &service,
+        "copy",
+        &source,
+        &dir.path().join("slow"),
+        json!({"options":{"bandwidth_limit":"1k"}}),
+    );
+    let active = service
+        .store
+        .enqueue(&slow, "manual", None, false, None)
+        .unwrap()
+        .unwrap();
+    service.notify.notify_waiters();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        service.store.run(&active.id).unwrap().unwrap().status,
+        RunStatus::Running
+    );
+    service.rc.stop().await;
+    assert_eq!(
+        finished(&service, &active.id).await.status,
+        RunStatus::Failed
+    );
+    assert_eq!(
+        run(&service, &file, false, false).await.status,
+        RunStatus::Succeeded
+    );
+    let restored = service.rc.connection(&service.config).await.unwrap();
+    assert_ne!(rc.generation, restored.generation);
+    service.shutdown.cancel();
+    for worker in workers {
+        worker.await.unwrap();
+    }
 }

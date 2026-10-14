@@ -20,13 +20,16 @@ type ApiResult<T> = Result<T, ApiError>;
 
 pub struct ApiError(StatusCode, String);
 impl ApiError {
-    fn bad(error: impl ToString) -> Self {
+    pub(crate) fn upstream(error: impl ToString) -> Self {
+        Self(StatusCode::BAD_GATEWAY, error.to_string())
+    }
+    pub(crate) fn bad(error: impl ToString) -> Self {
         Self(StatusCode::BAD_REQUEST, error.to_string())
     }
-    fn missing() -> Self {
+    pub(crate) fn missing() -> Self {
         Self(StatusCode::NOT_FOUND, "not found".into())
     }
-    fn conflict(error: impl ToString) -> Self {
+    pub(crate) fn conflict(error: impl ToString) -> Self {
         Self(StatusCode::CONFLICT, error.to_string())
     }
 }
@@ -46,6 +49,7 @@ pub fn router(service: Arc<Service>) -> Router {
     let static_files = ServeDir::new(&service.config.web_root)
         .not_found_service(ServeFile::new(service.config.web_root.join("index.html")));
     Router::new()
+        .merge(crate::remote_config::routes())
         .route(
             "/api/health",
             get(|| async { Json(json!({"status": "ok"})) }),
@@ -93,7 +97,13 @@ async fn same_origin(
             .into_response();
         }
     }
-    let response = next.run(request).await;
+    let config_response = request.uri().path().starts_with("/api/config/");
+    let mut response = next.run(request).await;
+    if config_response {
+        response
+            .headers_mut()
+            .insert("cache-control", "no-store".parse().unwrap());
+    }
     if (response.status().is_client_error() || response.status().is_server_error())
         && response
             .headers()
@@ -105,39 +115,49 @@ async fn same_origin(
         let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
             .unwrap_or_default();
-        return ApiError(status, String::from_utf8_lossy(&bytes).into_owned()).into_response();
+        let mut response =
+            ApiError(status, String::from_utf8_lossy(&bytes).into_owned()).into_response();
+        if config_response {
+            response
+                .headers_mut()
+                .insert("cache-control", "no-store".parse().unwrap());
+        }
+        return response;
     }
     response
 }
 
 async fn settings(State(service): App) -> Json<Value> {
     Json(
-        json!({"rclone_available": service.output(&["version"]).await.is_ok(), "config_path": service.config.rclone_config,
+        json!({"rclone_available": service.rc.connection(&service.config).await.is_ok(), "config_path": service.config.rclone_config,
         "concurrency": 1, "timezone": "UTC"}),
     )
 }
 async fn remotes(State(service): App) -> ApiResult<Json<Value>> {
-    let bytes = service.output(&["listremotes", "--long"]).await?;
-    let items: Vec<_> = String::from_utf8_lossy(&bytes)
-        .lines()
-        .filter_map(|line| {
-            let (name, kind) = line
-                .split_once(": ")
-                .or_else(|| line.strip_suffix(':').map(|n| (n, "unknown")))?;
-            Some(json!({"name": name, "type": kind.trim()}))
-        })
-        .collect();
+    let rc = service.rc.connection(&service.config).await?;
+    let names = rc.call("config/listremotes", json!({})).await?;
+    let mut items = Vec::new();
+    for name in names["remotes"].as_array().into_iter().flatten() {
+        let config = rc.call("config/get", json!({"name":name})).await?;
+        items.push(json!({"name":name,"type":config["type"].as_str().unwrap_or("unknown")}));
+    }
     Ok(Json(json!(items)))
 }
+
 #[derive(Deserialize)]
 struct FileQuery {
     path: String,
 }
 async fn files(State(service): App, Query(query): Query<FileQuery>) -> ApiResult<Json<Value>> {
     validate_path(&query.path).map_err(ApiError::bad)?;
-    let bytes = service.output(&["lsjson", &query.path]).await?;
-    let entries: Vec<Value> = serde_json::from_slice(&bytes).map_err(ApiError::bad)?;
-    let result: Vec<_> = entries.into_iter().map(|entry| {
+    let rc = service.rc.connection(&service.config).await?;
+    let listed = rc
+        .call("operations/list", json!({"fs":query.path,"remote":""}))
+        .await?;
+    let entries = listed["list"]
+        .as_array()
+        .ok_or_else(|| ApiError::upstream("invalid directory response"))?;
+    let result: Vec<_> = entries.iter().map(|entry| {
         let name = entry["Name"].as_str().unwrap_or_default();
         let separator = if query.path.ends_with(['/', ':']) { "" } else { "/" };
         json!({"name": name, "path": format!("{}{separator}{}", query.path, entry["Path"].as_str().unwrap_or(name)),
@@ -155,7 +175,15 @@ async fn mkdir(State(service): App, Json(body): Json<PathBody>) -> ApiResult<Jso
     let _guard = service.file_gate.try_lock().map_err(|_| {
         ApiError::conflict("wait for active transfers or file changes before changing files")
     })?;
-    service.output(&["mkdir", &body.path]).await?;
+    let rc = service.rc.connection(&service.config).await?;
+    let (fs, remote) = crate::rc::filesystem_path(&body.path);
+    if let Err(error) = rc
+        .call("operations/mkdir", json!({"fs":fs,"remote":remote}))
+        .await
+    {
+        service.rc.stop().await;
+        return Err(ApiError::upstream(error));
+    }
     Ok(Json(json!({"ok": true})))
 }
 #[derive(Deserialize)]
@@ -177,9 +205,22 @@ async fn delete_file(State(service): App, Json(body): Json<DeleteBody>) -> ApiRe
     let _guard = service.file_gate.try_lock().map_err(|_| {
         ApiError::conflict("wait for active transfers or file changes before deleting files")
     })?;
-    service
-        .output(&[if body.is_dir { "purge" } else { "deletefile" }, &body.path])
-        .await?;
+    let rc = service.rc.connection(&service.config).await?;
+    let (fs, remote) = crate::rc::filesystem_path(&body.path);
+    if let Err(error) = rc
+        .call(
+            if body.is_dir {
+                "operations/purge"
+            } else {
+                "operations/deletefile"
+            },
+            json!({"fs":fs,"remote":remote}),
+        )
+        .await
+    {
+        service.rc.stop().await;
+        return Err(ApiError::upstream(error));
+    }
     Ok(Json(json!({"ok": true})))
 }
 #[derive(Deserialize)]

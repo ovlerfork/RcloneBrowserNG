@@ -25,7 +25,10 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - name: Install transfer engine
-        run: sudo apt-get update && sudo apt-get install -y rclone
+        run: |
+          curl --fail --location https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip -o /tmp/rclone.zip
+          unzip /tmp/rclone.zip -d /tmp/rclone
+          sudo install /tmp/rclone/rclone-v1.75.2-linux-amd64/rclone /usr/local/bin/rclone
       - run: cargo test --locked --test rclone_workflow -- --ignored
   docker:
     strategy:

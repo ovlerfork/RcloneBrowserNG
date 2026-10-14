@@ -94,9 +94,9 @@ impl TaskInput {
                 || limit.len() > 30
                 || !limit
                     .chars()
-                    .all(|c| c.is_ascii_digit() || ".kKmMgGtTpPbBiI/".contains(c)))
+                    .all(|c| c.is_ascii_digit() || ".kKmMgGtTpPbBiI:".contains(c)))
         {
-            bail!("bandwidth_limit must be a rate such as 10M or 1M/2M");
+            bail!("bandwidth_limit must be a rate such as 10M or 1M:2M");
         }
         if self.options.exclude.len() > 100
             || self

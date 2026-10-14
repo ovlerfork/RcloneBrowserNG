@@ -4,10 +4,8 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use chrono::{Timelike, Utc};
-use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt},
-    process::{Child, Command},
     sync::{Mutex, Notify},
     task::JoinHandle,
 };
@@ -45,6 +43,8 @@ pub struct Service {
     pub notify: Notify,
     pub shutdown: CancellationToken,
     pub file_gate: Mutex<()>,
+    pub rc: crate::rc::RcManager,
+    pub config_sessions: Mutex<std::collections::HashMap<String, crate::remote_config::Session>>,
 }
 impl Service {
     pub fn new(config: Config) -> Result<Arc<Self>> {
@@ -56,83 +56,21 @@ impl Service {
             notify: Notify::new(),
             shutdown: CancellationToken::new(),
             file_gate: Mutex::new(()),
+            rc: crate::rc::RcManager::default(),
+            config_sessions: Mutex::new(std::collections::HashMap::new()),
         }))
     }
     pub fn start(self: &Arc<Self>) -> Vec<JoinHandle<()>> {
         let service = self.clone();
         let mut handles = vec![tokio::spawn(async move {
-            service.worker().await;
+            service.clone().worker().await;
+            service.rc.stop().await;
         })];
         let service = self.clone();
         handles.push(tokio::spawn(async move {
             service.scheduler().await;
         }));
         handles
-    }
-    pub fn command(&self) -> Command {
-        let mut command = Command::new(&self.config.binary);
-        command
-            .arg("--config")
-            .arg(&self.config.rclone_config)
-            .arg("--ask-password=false")
-            .stdin(Stdio::null())
-            .kill_on_drop(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.as_std_mut().process_group(0);
-        }
-        #[cfg(target_os = "linux")]
-        unsafe {
-            let parent = libc::getpid();
-            command.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::getppid() != parent {
-                    return Err(std::io::Error::other(
-                        "service exited before rclone started",
-                    ));
-                }
-                Ok(())
-            });
-        }
-        command
-    }
-    pub async fn output(&self, args: &[&str]) -> Result<Vec<u8>> {
-        let mut child = self
-            .command()
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("could not start rclone")?;
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(60), async {
-            tokio::try_join!(
-                read_capped(stdout, 16 * 1024 * 1024),
-                read_capped(stderr, 64 * 1024),
-                async { Ok::<_, anyhow::Error>(child.wait().await?) }
-            )
-        })
-        .await;
-        match result {
-            Ok(Ok((out, _, status))) if status.success() => Ok(out),
-            Ok(Ok((_, err, status))) => bail!(
-                "rclone exited with {}: {}",
-                status,
-                String::from_utf8_lossy(&err).trim()
-            ),
-            Ok(Err(error)) => {
-                terminate(&mut child).await;
-                Err(error)
-            }
-            Err(_) => {
-                terminate(&mut child).await;
-                bail!("rclone request timed out after 60 seconds");
-            }
-        }
     }
     async fn worker(self: Arc<Self>) {
         loop {
@@ -179,132 +117,195 @@ impl Service {
                 .finish(&run.id, RunStatus::Cancelled, None, None)?;
             return Ok(());
         }
-        let mut command = self.command();
-        command.arg(if run.single_file {
-            "moveto"
-        } else {
-            run.operation.command()
-        });
-        command
-            .arg(&run.source)
-            .arg(&run.destination)
-            .arg("--transfers")
-            .arg(run.options.transfers.to_string())
-            .arg("--checkers")
-            .arg(run.options.checkers.to_string())
-            .args([
-                "--use-json-log",
-                "--log-level",
-                "INFO",
-                "--stats",
-                "1s",
-                "--stats-log-level",
-                "NOTICE",
-            ]);
-        if run.dry_run {
-            command.arg("--dry-run");
+        let rc = self.rc.connection(&self.config).await?;
+        rc.call(
+            "core/bwlimit",
+            serde_json::json!({"rate": run.options.bandwidth_limit.as_deref().unwrap_or("off")}),
+        )
+        .await?;
+        let result = self.execute_job(run, &rc).await;
+        if result.is_err() {
+            self.rc.stop().await;
+            return result;
         }
-        if let Some(limit) = &run.options.bandwidth_limit {
-            command.arg("--bwlimit").arg(limit);
+        if rc
+            .call("core/bwlimit", serde_json::json!({"rate":"off"}))
+            .await
+            .is_err()
+        {
+            self.rc.stop().await;
         }
-        for pattern in &run.options.exclude {
-            command.arg("--exclude").arg(pattern);
-        }
+        result
+    }
+    async fn execute_job(&self, run: &Run, rc: &crate::rc::Connection) -> Result<()> {
+        use serde_json::json;
+        let group = format!("run-{}", run.id);
+        let mut body = json!({"_async":true,"_group":group,
+            "_config":{"DryRun":run.dry_run,"Transfers":run.options.transfers,"Checkers":run.options.checkers},
+            "_filter":{"ExcludeRule":run.options.exclude}});
+        let endpoint;
         if run.operation == Operation::Bisync {
-            // Each task owns its baselines. They survive runs and service restarts.
             let directory = self.config.data_dir.join("bisync").join(
                 run.task_id
                     .as_ref()
                     .context("bisync requires a saved task")?,
             );
             std::fs::create_dir_all(&directory)?;
-            command.arg("--workdir").arg(directory);
-            if run.resync {
-                command.arg("--resync");
+            body["path1"] = json!(run.source);
+            body["path2"] = json!(run.destination);
+            body["workdir"] = json!(directory);
+            body["resync"] = json!(run.resync);
+            body["dryRun"] = json!(run.dry_run);
+            body["maxDelete"] = json!(50);
+            endpoint = "sync/bisync".to_owned();
+        } else {
+            let (src_fs, src_remote) = crate::rc::filesystem_path(&run.source);
+            let stat = rc
+                .call("operations/stat", json!({"fs":src_fs,"remote":src_remote}))
+                .await?;
+            let single_file = run.single_file || stat["item"]["IsDir"] == false;
+            if single_file {
+                if run.operation == Operation::Sync {
+                    bail!("sync requires a directory source; use copy or move for a file");
+                }
+                let destination = if run.single_file {
+                    run.destination.clone()
+                } else {
+                    format!(
+                        "{}/{}",
+                        run.destination.trim_end_matches('/'),
+                        src_remote.rsplit('/').next().context("missing filename")?
+                    )
+                };
+                let (dst_fs, dst_remote) = crate::rc::filesystem_path(&destination);
+                body["srcFs"] = json!(src_fs);
+                body["srcRemote"] = json!(src_remote);
+                body["dstFs"] = json!(dst_fs);
+                body["dstRemote"] = json!(dst_remote);
+                endpoint = format!("operations/{}file", run.operation.command());
+            } else {
+                body["srcFs"] = json!(run.source);
+                body["dstFs"] = json!(run.destination);
+                endpoint = format!("sync/{}", run.operation.command());
             }
         }
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("could not start rclone")?;
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let out_service = self.clone();
-        let out_id = run.id.clone();
-        let output = tokio::spawn(async move { out_service.capture(&out_id, stdout).await });
-        let err_service = self.clone();
-        let err_id = run.id.clone();
-        let errors = tokio::spawn(async move { err_service.capture(&err_id, stderr).await });
-        let (status, exit_code, error) = loop {
-            tokio::select! {
-                status = child.wait() => {
-                    let status = status?;
-                    break (if status.success() { RunStatus::Succeeded } else { RunStatus::Failed }, status.code(), (!status.success()).then(|| format!("rclone exited with {status}; see run logs")));
-                }
-                _ = self.shutdown.cancelled() => {
-                    terminate(&mut child).await;
-                    break (RunStatus::Interrupted, None, Some("Service stopped; transfer may be partial".into()));
-                }
-                _ = tokio::time::sleep(Duration::from_millis(250)) => {
-                    if self.store.run(&run.id)?.is_some_and(|r| r.cancel_requested) {
-                        terminate(&mut child).await;
-                        break (RunStatus::Cancelled, None, Some("Cancelled; completed transfers and deletions are not rolled back".into()));
-                    }
-                }
+        self.record(&run.id, "info", "Starting rclone RPC job", None)?;
+        let started = match rc.call(&endpoint, body).await {
+            Ok(started) => started,
+            Err(error) => {
+                // The server may have accepted an async job before the response was lost.
+                self.rc.stop().await;
+                return Err(
+                    error.context("job start failed; daemon stopped to prevent untracked work")
+                );
             }
         };
-        output.await??;
-        errors.await??;
-        self.store.finish(&run.id, status, exit_code, error)?;
-        Ok(())
-    }
-    async fn capture(&self, id: &str, mut reader: impl AsyncRead + Unpin) -> Result<()> {
-        let mut chunk = [0u8; 4096];
-        let mut line = Vec::new();
+        let Some(job_id) = started["jobid"].as_u64() else {
+            self.rc.stop().await;
+            bail!("rclone returned no job ID; daemon stopped to prevent untracked work");
+        };
+        let mut stopping = None;
+        let mut stop_started = None;
+        let mut last_stats = std::time::Instant::now() - Duration::from_secs(1);
         loop {
-            let count = reader.read(&mut chunk).await?;
-            if count == 0 {
-                if !line.is_empty() {
-                    self.record_line(id, &line)?;
+            let shutdown = self.shutdown.is_cancelled();
+            let cancelled = self.store.run(&run.id)?.is_some_and(|r| r.cancel_requested);
+            if stopping.is_none() && (shutdown || cancelled) {
+                stopping = Some(if shutdown {
+                    RunStatus::Interrupted
+                } else {
+                    RunStatus::Cancelled
+                });
+                stop_started = Some(std::time::Instant::now());
+                if rc.call("job/stop", json!({"jobid":job_id})).await.is_err() {
+                    self.rc.stop().await;
+                    self.store.finish(
+                        &run.id,
+                        stopping.unwrap(),
+                        None,
+                        Some("Transfer stopped; completed changes are not rolled back".into()),
+                    )?;
+                    return Ok(());
                 }
-                break;
             }
-            for byte in &chunk[..count] {
-                if *byte == b'\n' {
-                    self.record_line(id, &line)?;
-                    line.clear();
-                } else if line.len() < 16 * 1024 {
-                    line.push(*byte);
+            let status = match rc.call("job/status", json!({"jobid":job_id})).await {
+                Ok(status) => status,
+                Err(error) => {
+                    self.rc.stop().await;
+                    return Err(error.context("lost active rclone job; transfer may be partial"));
                 }
+            };
+            if (last_stats.elapsed() >= Duration::from_secs(1) || status["finished"] == true)
+                && let Ok(mut stats) = rc.call("core/stats", json!({"group":group})).await
+            {
+                if let Some(object) = stats.as_object_mut() {
+                    object.remove("lastError");
+                }
+                let summary = format!(
+                    "Transferred {} bytes, {} files; {} errors",
+                    stats["bytes"].as_u64().unwrap_or(0),
+                    stats["transfers"].as_u64().unwrap_or(0),
+                    stats["errors"].as_u64().unwrap_or(0)
+                );
+                self.record(&run.id, "info", &summary, Some(stats))?;
+                last_stats = std::time::Instant::now();
             }
+            if status["finished"] == true {
+                let success = status["success"] == true;
+                let terminal = stopping.unwrap_or(if success {
+                    RunStatus::Succeeded
+                } else {
+                    RunStatus::Failed
+                });
+                let error =
+                    if terminal == RunStatus::Cancelled || terminal == RunStatus::Interrupted {
+                        Some("Transfer stopped; completed changes are not rolled back".to_owned())
+                    } else if !success {
+                        // Job errors may contain provider credentials embedded in paths or provider responses.
+                        Some(
+                        "rclone job failed; check endpoints, credentials, and transfer settings"
+                            .to_owned(),
+                    )
+                    } else {
+                        None
+                    };
+                self.record(
+                    &run.id,
+                    if success { "info" } else { "error" },
+                    error.as_deref().unwrap_or("Transfer completed"),
+                    None,
+                )?;
+                self.store.finish(&run.id, terminal, None, error)?;
+                return Ok(());
+            }
+            if stop_started.is_some_and(|time| time.elapsed() > Duration::from_secs(5)) {
+                self.rc.stop().await;
+                self.store.finish(
+                    &run.id,
+                    stopping.unwrap(),
+                    None,
+                    Some(
+                        "rclone stopped after cancellation timeout; transfer may be partial".into(),
+                    ),
+                )?;
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        Ok(())
     }
-    fn record_line(&self, id: &str, line: &[u8]) -> Result<()> {
-        if line.is_empty() {
-            return Ok(());
-        }
-        let value = serde_json::from_slice::<serde_json::Value>(line).ok();
-        let message = value
-            .as_ref()
-            .and_then(|v| v.get("msg"))
-            .and_then(|v| v.as_str())
-            .map(str::to_owned)
-            .unwrap_or_else(|| String::from_utf8_lossy(line).into_owned());
-        let level = value
-            .as_ref()
-            .and_then(|v| v.get("level"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("info")
-            .to_string();
-        let progress = value.as_ref().and_then(|v| v.get("stats")).cloned();
+    fn record(
+        &self,
+        id: &str,
+        level: &str,
+        message: &str,
+        progress: Option<serde_json::Value>,
+    ) -> Result<()> {
         self.store.log(
             id,
             LogEntry {
                 time: Utc::now(),
-                level,
-                message,
+                level: level.into(),
+                message: message.into(),
             },
             progress,
         )
@@ -346,45 +347,5 @@ impl Service {
         }
         self.notify.notify_waiters();
         Ok(())
-    }
-}
-
-async fn read_capped(mut reader: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    (&mut reader)
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .await?;
-    if bytes.len() > limit {
-        bail!(
-            "rclone response exceeds {} bytes; browse a smaller directory",
-            limit
-        );
-    }
-    Ok(bytes)
-}
-async fn terminate(child: &mut Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGTERM);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.start_kill();
-    }
-    if tokio::time::timeout(Duration::from_secs(5), child.wait())
-        .await
-        .is_err()
-    {
-        #[cfg(unix)]
-        if let Some(pid) = child.id() {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-        }
-        let _ = child.kill().await;
-        let _ = child.wait().await;
     }
 }
