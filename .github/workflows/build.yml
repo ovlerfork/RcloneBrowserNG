@@ -19,8 +19,10 @@ jobs:
         with:
           node-version: "24"
       - run: corepack enable
-      - run: pnpm --dir web install --frozen-lockfile
-      - run: pnpm --dir web build
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - run: pnpm build
+        working-directory: web
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
