@@ -109,11 +109,9 @@ impl Store {
             let Some(pattern) = &task.input.schedule else {
                 return Ok(None);
             };
-            let due = DateTime::from_timestamp(
-                minute.context("scheduled run requires a minute")? * 60,
-                0,
-            )
-            .context("invalid schedule timestamp")?;
+            let minute = minute.context("scheduled run requires a minute")?;
+            let due =
+                DateTime::from_timestamp(minute * 60, 0).context("invalid schedule timestamp")?;
             if !parse_schedule(pattern)?.is_time_matching(&due)? {
                 return Ok(None);
             }
@@ -122,7 +120,7 @@ impl Store {
                 [task_id],
                 |r| r.get(0),
             )?;
-            if previous == minute {
+            if previous.is_some_and(|previous| minute <= previous) {
                 return Ok(None);
             }
             tx.execute(
@@ -175,13 +173,10 @@ impl Store {
     pub fn claim(&self) -> Result<Option<Run>> {
         let db = self.connection.lock().unwrap();
         let active = active_runs(&db)?;
-        let running: Vec<_> = active
-            .iter()
-            .filter(|r| r.status == RunStatus::Running)
-            .collect();
-        let candidate = active.iter().find(|r| {
-            r.status == RunStatus::Queued && !running.iter().any(|other| r.overlaps(other))
-        });
+        if active.iter().any(|run| run.status == RunStatus::Running) {
+            return Ok(None);
+        }
+        let candidate = active.iter().find(|run| run.status == RunStatus::Queued);
         if let Some(run) = candidate {
             let mut run = run.clone();
             run.status = RunStatus::Running;

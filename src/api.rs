@@ -113,7 +113,7 @@ async fn same_origin(
 async fn settings(State(service): App) -> Json<Value> {
     Json(
         json!({"rclone_available": service.output(&["version"]).await.is_ok(), "config_path": service.config.rclone_config,
-        "concurrency": service.config.concurrency, "timezone": "UTC"}),
+        "concurrency": 1, "timezone": "UTC"}),
     )
 }
 async fn remotes(State(service): App) -> ApiResult<Json<Value>> {
@@ -152,10 +152,9 @@ struct PathBody {
 }
 async fn mkdir(State(service): App, Json(body): Json<PathBody>) -> ApiResult<Json<Value>> {
     validate_path(&body.path).map_err(ApiError::bad)?;
-    let _guard = service
-        .file_gate
-        .try_write()
-        .map_err(|_| ApiError::conflict("wait for active transfers before changing files"))?;
+    let _guard = service.file_gate.try_lock().map_err(|_| {
+        ApiError::conflict("wait for active transfers or file changes before changing files")
+    })?;
     service.output(&["mkdir", &body.path]).await?;
     Ok(Json(json!({"ok": true})))
 }
@@ -175,10 +174,9 @@ async fn delete_file(State(service): App, Json(body): Json<DeleteBody>) -> ApiRe
     if is_root(&body.path) {
         return Err(ApiError::bad("cannot delete a filesystem or remote root"));
     }
-    let _guard = service
-        .file_gate
-        .try_write()
-        .map_err(|_| ApiError::conflict("wait for active transfers before deleting files"))?;
+    let _guard = service.file_gate.try_lock().map_err(|_| {
+        ApiError::conflict("wait for active transfers or file changes before deleting files")
+    })?;
     service
         .output(&[if body.is_dir { "purge" } else { "deletefile" }, &body.path])
         .await?;

@@ -8,7 +8,7 @@ use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::{Child, Command},
-    sync::{Notify, RwLock},
+    sync::{Mutex, Notify},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -20,16 +20,9 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub web_root: PathBuf,
     pub bind_addr: String,
-    pub concurrency: usize,
 }
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let concurrency = std::env::var("MAX_CONCURRENT_RUNS")
-            .unwrap_or_else(|_| "2".into())
-            .parse::<usize>()?;
-        if !(1..=16).contains(&concurrency) {
-            bail!("MAX_CONCURRENT_RUNS must be 1–16");
-        }
         Ok(Self {
             binary: std::env::var("RCLONE_BINARY").unwrap_or_else(|_| "rclone".into()),
             rclone_config: std::env::var("RCLONE_CONFIG")
@@ -42,7 +35,6 @@ impl Config {
                 .unwrap_or_else(|_| "web/dist".into())
                 .into(),
             bind_addr: std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into()),
-            concurrency,
         })
     }
 }
@@ -52,7 +44,7 @@ pub struct Service {
     pub store: Store,
     pub notify: Notify,
     pub shutdown: CancellationToken,
-    pub file_gate: RwLock<()>,
+    pub file_gate: Mutex<()>,
 }
 impl Service {
     pub fn new(config: Config) -> Result<Arc<Self>> {
@@ -63,17 +55,14 @@ impl Service {
             store,
             notify: Notify::new(),
             shutdown: CancellationToken::new(),
-            file_gate: RwLock::new(()),
+            file_gate: Mutex::new(()),
         }))
     }
     pub fn start(self: &Arc<Self>) -> Vec<JoinHandle<()>> {
-        let mut handles = vec![];
-        for _ in 0..self.config.concurrency {
-            let service = self.clone();
-            handles.push(tokio::spawn(async move {
-                service.worker().await;
-            }));
-        }
+        let service = self.clone();
+        let mut handles = vec![tokio::spawn(async move {
+            service.worker().await;
+        })];
         let service = self.clone();
         handles.push(tokio::spawn(async move {
             service.scheduler().await;
@@ -150,7 +139,7 @@ impl Service {
             if self.shutdown.is_cancelled() {
                 break;
             }
-            let gate = tokio::select! { _ = self.shutdown.cancelled() => break, gate = self.file_gate.read() => gate };
+            let gate = tokio::select! { _ = self.shutdown.cancelled() => break, gate = self.file_gate.lock() => gate };
             let run = match self.store.claim() {
                 Ok(run) => run,
                 Err(error) => {

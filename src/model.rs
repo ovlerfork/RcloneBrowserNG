@@ -204,13 +204,6 @@ impl Run {
             single_file: false,
         }
     }
-    pub fn overlaps(&self, other: &Self) -> bool {
-        [&self.source, &self.destination].into_iter().any(|a| {
-            [&other.source, &other.destination]
-                .into_iter()
-                .any(|b| paths_overlap(a, b))
-        })
-    }
 }
 
 pub fn validate_path(value: &str) -> Result<()> {

@@ -21,7 +21,6 @@ fn service(directory: &TempDir) -> Arc<Service> {
         data_dir: directory.path().join("state"),
         web_root: directory.path().join("web"),
         bind_addr: "127.0.0.1:0".into(),
-        concurrency: 2,
     })
     .unwrap()
 }
@@ -125,15 +124,15 @@ async fn task_api_requires_destructive_acknowledgment_and_freezes_runs() {
 }
 
 #[test]
-fn scheduling_deduplicates_and_resource_locks_serialize_overlapping_tasks() {
+fn scheduling_deduplicates_and_transfers_run_one_at_a_time() {
     let dir = TempDir::new().unwrap();
     let service = service(&dir);
-    let mut first = input("First", "test:a", "test:b");
+    let mut first = input("First", "/tmp/shared", "/tmp/target");
     first.schedule = Some("*/5 * * * *".into());
     let first = service.store.save_task(None, first).unwrap();
     let second = service
         .store
-        .save_task(None, input("Second", "test:b/sub", "test:c"))
+        .save_task(None, input("Second", "disk:/tmp/shared", "disk:/tmp/other"))
         .unwrap();
     let third = service
         .store
@@ -149,12 +148,10 @@ fn scheduling_deduplicates_and_resource_locks_serialize_overlapping_tasks() {
         .store
         .enqueue(&second.id, "manual", None, false, None)
         .unwrap();
-    let independent = service
+    service
         .store
         .enqueue(&third.id, "manual", None, false, None)
-        .unwrap()
         .unwrap();
-    assert_eq!(service.store.claim().unwrap().unwrap().id, independent.id);
     assert!(service.store.claim().unwrap().is_none());
     service
         .store
@@ -162,9 +159,16 @@ fn scheduling_deduplicates_and_resource_locks_serialize_overlapping_tasks() {
         .unwrap();
     service.schedule_at(time).unwrap();
     assert_eq!(service.store.runs(Some(&first.id), 10).unwrap().len(), 1);
+    let second_run = service.store.claim().unwrap().unwrap();
+    assert_eq!(second_run.task_id.as_deref(), Some(second.id.as_str()));
+    assert!(service.store.claim().unwrap().is_none());
+    service
+        .store
+        .finish(&second_run.id, RunStatus::Succeeded, Some(0), None)
+        .unwrap();
     assert_eq!(
         service.store.claim().unwrap().unwrap().task_id.as_deref(),
-        Some(second.id.as_str())
+        Some(third.id.as_str())
     );
     // Sunday uses the ordinary cron value 0; day-of-month and weekday have OR semantics.
     let cron = rclone_browser_ng::model::parse_schedule("0 0 1 * 0").unwrap();
@@ -172,6 +176,46 @@ fn scheduling_deduplicates_and_resource_locks_serialize_overlapping_tasks() {
         cron.is_time_matching(&chrono::Utc.with_ymd_and_hms(2026, 10, 18, 0, 0, 0).unwrap())
             .unwrap()
     );
+}
+
+#[test]
+fn scheduled_minutes_do_not_replay_after_clock_rollback_or_restart() {
+    let dir = TempDir::new().unwrap();
+    let first = service(&dir);
+    let mut definition = input("Scheduled", "test:a", "test:b");
+    definition.schedule = Some("* * * * *".into());
+    let task = first.store.save_task(None, definition).unwrap();
+    for minute in [10, 11] {
+        let run = first
+            .store
+            .enqueue(&task.id, "schedule", None, false, Some(minute))
+            .unwrap()
+            .unwrap();
+        first.store.claim().unwrap();
+        first
+            .store
+            .finish(&run.id, RunStatus::Succeeded, Some(0), None)
+            .unwrap();
+    }
+    drop(first);
+    let restarted = service(&dir);
+    for minute in [10, 11] {
+        assert!(
+            restarted
+                .store
+                .enqueue(&task.id, "schedule", None, false, Some(minute))
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert!(
+        restarted
+            .store
+            .enqueue(&task.id, "schedule", None, false, Some(12))
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(restarted.store.runs(Some(&task.id), 10).unwrap().len(), 3);
 }
 
 #[test]

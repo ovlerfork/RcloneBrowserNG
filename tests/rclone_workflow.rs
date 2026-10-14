@@ -1,3 +1,7 @@
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use rclone_browser_ng::{
     model::{Run, RunStatus, TaskInput},
     runner::{Config, Service},
@@ -5,6 +9,7 @@ use rclone_browser_ng::{
 use serde_json::json;
 use std::{path::Path, sync::Arc, time::Duration};
 use tempfile::TempDir;
+use tower::ServiceExt;
 
 fn service(dir: &TempDir) -> Arc<Service> {
     std::fs::write(dir.path().join("rclone.conf"), "[disk]\ntype = local\n").unwrap();
@@ -14,7 +19,6 @@ fn service(dir: &TempDir) -> Arc<Service> {
         data_dir: dir.path().join("state"),
         web_root: dir.path().join("web"),
         bind_addr: "127.0.0.1:0".into(),
-        concurrency: 2,
     })
     .unwrap()
 }
@@ -158,10 +162,68 @@ async fn real_rclone_cancellation_and_shutdown_reap_running_transfers() {
         service.store.run(&run.id).unwrap().unwrap().status,
         RunStatus::Running
     );
+    let alias = service
+        .store
+        .save_task(
+            None,
+            serde_json::from_value(json!({
+                "name": "Alias copy", "operation": "copy",
+                "source": format!("disk:{}", source.display()),
+                "destination": dir.path().join("alias destination")
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let queued = service
+        .store
+        .enqueue(&alias.id, "manual", None, false, None)
+        .unwrap()
+        .unwrap();
+    service.notify.notify_waiters();
+    let app = rclone_browser_ng::api::router(service.clone());
+    for (route, body) in [
+        ("mkdir", json!({"path": dir.path().join("new directory")})),
+        (
+            "delete",
+            json!({"path": source.join("large.bin"), "is_dir": false, "confirmed": true}),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/files/{route}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/files?path={}", source.display()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        service.store.run(&queued.id).unwrap().unwrap().status,
+        RunStatus::Queued
+    );
     service.store.cancel(&run.id).unwrap();
     assert_eq!(
         finished(&service, &run.id).await.status,
         RunStatus::Cancelled
+    );
+    assert_eq!(
+        finished(&service, &queued.id).await.status,
+        RunStatus::Succeeded
     );
     let run = service
         .store
