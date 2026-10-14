@@ -36,6 +36,8 @@ struct Update {
     parameters: HashMap<String, String>,
     #[serde(default)]
     unset: Vec<String>,
+    #[serde(default)]
+    configure: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -94,6 +96,20 @@ fn validate_parameters(parameters: &HashMap<String, String>, unset: &[String]) -
 }
 async fn call(service: &Service, rc: &Connection, endpoint: &str, body: Value) -> Result<Value> {
     match rc.call(endpoint, body).await {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            service.rc.stop().await;
+            Err(ApiError::upstream(error))
+        }
+    }
+}
+// Callers hold both the mutation lock and the configuration write lock. Clear
+// canonical filesystem entries too: alias/wrapper cache keys can outlive a
+// remote's native config invalidation, including partially successful updates.
+async fn mutate(service: &Service, rc: &Connection, endpoint: &str, body: Value) -> Result<Value> {
+    let result = rc.call(endpoint, body).await;
+    let cleared = rc.call("fscache/clear", json!({})).await;
+    match result.and_then(|value| cleared.map(|_| value)) {
         Ok(value) => Ok(value),
         Err(error) => {
             service.rc.stop().await;
@@ -176,6 +192,7 @@ async fn create(State(service): App, Json(body): Json<Create>) -> Result<Json<Va
     validate_name(&body.name)?;
     validate_parameters(&body.parameters, &[])?;
     let _guard = service.file_gate.try_lock().map_err(|_| busy())?;
+    let _config = service.config_gate.write().await;
     let rc = connection(&service).await?;
     if names(&service, &rc).await?.contains(&body.name) {
         return Err(ApiError::conflict("a remote with this name already exists"));
@@ -187,7 +204,7 @@ async fn create(State(service): App, Json(body): Json<Create>) -> Result<Json<Va
     {
         return Err(ApiError::bad("unknown rclone provider"));
     }
-    let result = call(&service, &rc, "config/create", json!({"name":body.name,"type":body.kind,"parameters":body.parameters,"opt":{"nonInteractive":true,"obscure":true}})).await?;
+    let result = mutate(&service, &rc, "config/create", json!({"name":body.name,"type":body.kind,"parameters":body.parameters,"opt":{"nonInteractive":true,"obscure":true}})).await?;
     wizard(&service, &rc, &body.name, result).await
 }
 async fn update(
@@ -197,6 +214,7 @@ async fn update(
 ) -> Result<Json<Value>> {
     validate_parameters(&body.parameters, &body.unset)?;
     let _guard = service.file_gate.try_lock().map_err(|_| busy())?;
+    let _config = service.config_gate.write().await;
     let rc = connection(&service).await?;
     require_remote(&service, &rc, &name).await?;
     service
@@ -205,7 +223,7 @@ async fn update(
         .await
         .retain(|_, session| session.name != name);
     if !body.unset.is_empty() {
-        call(
+        mutate(
             &service,
             &rc,
             "config/unset",
@@ -213,18 +231,19 @@ async fn update(
         )
         .await?;
     }
-    let result = if body.parameters.is_empty() {
+    let result = if body.parameters.is_empty() && !body.configure {
         json!({})
     } else {
-        call(&service, &rc,"config/update",json!({"name":name,"parameters":body.parameters,"opt":{"nonInteractive":true,"obscure":true}})).await?
+        mutate(&service, &rc,"config/update",json!({"name":name,"parameters":body.parameters,"opt":{"nonInteractive":true,"obscure":true}})).await?
     };
     wizard(&service, &rc, &name, result).await
 }
 async fn delete(State(service): App, Path(name): Path<String>) -> Result<StatusCode> {
     let _guard = service.file_gate.try_lock().map_err(|_| busy())?;
+    let _config = service.config_gate.write().await;
     let rc = connection(&service).await?;
     require_remote(&service, &rc, &name).await?;
-    call(&service, &rc, "config/delete", json!({"name":name})).await?;
+    mutate(&service, &rc, "config/delete", json!({"name":name})).await?;
     service
         .config_sessions
         .lock()
@@ -238,6 +257,7 @@ async fn continue_config(
     Json(body): Json<Continue>,
 ) -> Result<Json<Value>> {
     let _guard = service.file_gate.try_lock().map_err(|_| busy())?;
+    let _config = service.config_gate.write().await;
     let rc = connection(&service).await?;
     let mut sessions = service.config_sessions.lock().await;
     let session = sessions
@@ -255,7 +275,7 @@ async fn continue_config(
     let previous_option = session.option.clone();
     sessions.remove(&body.session_id);
     drop(sessions);
-    let mut result = call(&service, &rc,"config/update",json!({"name":name,"parameters":{},"opt":{"nonInteractive":true,"continue":true,"state":state,"result":body.answer,"obscure":true}})).await?;
+    let mut result = mutate(&service, &rc,"config/update",json!({"name":name,"parameters":{},"opt":{"nonInteractive":true,"continue":true,"state":state,"result":body.answer,"obscure":true}})).await?;
     if result["Option"].is_null()
         && result["Error"]
             .as_str()
@@ -276,7 +296,7 @@ async fn wizard(
         if result["Option"]["Name"] != "config_is_local" {
             break;
         }
-        result = call(service, rc,"config/update",json!({"name":name,"parameters":{},"opt":{"nonInteractive":true,"continue":true,"state":result["State"],"result":"false","obscure":true}})).await?;
+        result = mutate(service, rc,"config/update",json!({"name":name,"parameters":{},"opt":{"nonInteractive":true,"continue":true,"state":result["State"],"result":"false","obscure":true}})).await?;
     }
     let state = result["State"].as_str().unwrap_or("");
     let mut sessions = service.config_sessions.lock().await;

@@ -121,7 +121,7 @@ impl RcManager {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             let endpoints = connection.call("rc/list", json!({})).await?;
-            for required in ["sync/copy", "sync/sync", "sync/move", "sync/bisync", "operations/list", "operations/stat", "operations/copyfile", "operations/movefile", "operations/mkdir", "operations/purge", "operations/deletefile", "config/providers", "config/get", "config/listremotes", "config/create", "config/update", "config/unset", "config/delete", "job/status", "job/stop", "core/stats", "core/bwlimit"] {
+            for required in ["sync/copy", "sync/sync", "sync/move", "sync/bisync", "operations/list", "operations/stat", "operations/copyfile", "operations/movefile", "operations/mkdir", "operations/purge", "operations/deletefile", "config/providers", "config/get", "config/listremotes", "config/create", "config/update", "config/unset", "config/delete", "fscache/clear", "job/status", "job/stop", "core/stats", "core/bwlimit"] {
                 if !endpoints["commands"].as_array().is_some_and(|commands| commands.iter().any(|c| c["Path"] == required)) {
                     bail!("rclone is missing required RPC endpoint {required}; install rclone 1.75.2 or newer");
                 }

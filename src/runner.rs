@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{Timelike, Utc};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
-    sync::{Mutex, Notify},
+    sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -43,6 +43,7 @@ pub struct Service {
     pub notify: Notify,
     pub shutdown: CancellationToken,
     pub file_gate: Mutex<()>,
+    pub config_gate: RwLock<()>,
     pub rc: crate::rc::RcManager,
     pub config_sessions: Mutex<std::collections::HashMap<String, crate::remote_config::Session>>,
 }
@@ -56,6 +57,7 @@ impl Service {
             notify: Notify::new(),
             shutdown: CancellationToken::new(),
             file_gate: Mutex::new(()),
+            config_gate: RwLock::new(()),
             rc: crate::rc::RcManager::default(),
             config_sessions: Mutex::new(std::collections::HashMap::new()),
         }))

@@ -330,6 +330,16 @@ async fn config_edit_preserves_secrets_and_rejects_duplicate_create() {
     assert_eq!(after["pass"], before["pass"]);
     assert_eq!(after["host"], "new.example");
     assert!(after.get("custom_key").is_none());
+    let (status, value) = api_request(
+        &service,
+        "PUT",
+        "/api/config/remotes/ssh",
+        json!({"configure":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    let reconfigured = rc.call("config/get", json!({"name":"ssh"})).await.unwrap();
+    assert_eq!(reconfigured["pass"], before["pass"]);
     let guard = service.file_gate.lock().await;
     assert_eq!(
         api_request(
@@ -360,6 +370,57 @@ async fn config_edit_preserves_secrets_and_rejects_duplicate_create() {
 
 #[tokio::test]
 #[ignore = "requires rclone 1.75.2 or newer"]
+async fn editing_a_browsed_alias_changes_subsequent_file_operations() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::write(first.join("old.txt"), "old").unwrap();
+    std::fs::write(second.join("new.txt"), "new").unwrap();
+    let (status, value) = api_request(
+        &service,
+        "POST",
+        "/api/config/remotes",
+        json!({"name":"alias","type":"alias","parameters":{"remote":first}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    let (status, listing) =
+        api_request(&service, "GET", "/api/files?path=alias:", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{listing}");
+    assert_eq!(listing[0]["name"], "old.txt");
+    let (status, value) = api_request(
+        &service,
+        "PUT",
+        "/api/config/remotes/alias",
+        json!({"parameters":{"remote":second}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    // Browsing stays available while a transfer owns the execution lock.
+    let guard = service.file_gate.lock().await;
+    let (status, listing) =
+        api_request(&service, "GET", "/api/files?path=alias:", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{listing}");
+    assert_eq!(listing[0]["name"], "new.txt");
+    drop(guard);
+    let (status, value) = api_request(
+        &service,
+        "POST",
+        "/api/files/mkdir",
+        json!({"path":"alias:created"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert!(second.join("created").is_dir());
+    assert!(!first.join("created").exists());
+    service.rc.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires rclone 1.75.2 or newer"]
 async fn oauth_wizard_binds_state_and_returns_headless_authorization_prompt() {
     let dir = TempDir::new().unwrap();
     let service = service(&dir);
@@ -372,6 +433,19 @@ async fn oauth_wizard_binds_state_and_returns_headless_authorization_prompt() {
     .await;
     assert_eq!(status, StatusCode::OK, "{wizard}");
     assert_eq!(wizard["option"]["Name"], "config_shared_client_id");
+    let abandoned_session = wizard["session_id"].clone();
+    let (status, reopened) = api_request(
+        &service,
+        "PUT",
+        "/api/config/remotes/cloud",
+        json!({"configure":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reopened}");
+    assert_eq!(reopened["complete"], false, "{reopened}");
+    assert_eq!(reopened["option"]["Name"], "config_shared_client_id");
+    assert_ne!(reopened["session_id"], abandoned_session);
+    wizard = reopened;
     let session = wizard["session_id"].clone();
     assert_eq!(
         api_request(
@@ -411,6 +485,17 @@ async fn oauth_wizard_binds_state_and_returns_headless_authorization_prompt() {
     assert_eq!(invalid["complete"], false, "{invalid}");
     assert!(invalid["error"].is_string(), "{invalid}");
     assert_eq!(invalid["option"]["Name"], "config_token");
+    let (status, retried) = api_request(
+        &service,
+        "POST",
+        "/api/config/remotes/cloud/continue",
+        json!({"session_id":invalid["session_id"],"answer":"another invalid token"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    assert_eq!(retried["complete"], false);
+    assert_eq!(retried["option"]["Name"], "config_token");
+    assert!(!retried.to_string().contains("another invalid token"));
     assert_eq!(
         api_request(
             &service,

@@ -134,6 +134,7 @@ async fn settings(State(service): App) -> Json<Value> {
     )
 }
 async fn remotes(State(service): App) -> ApiResult<Json<Value>> {
+    let _config = service.config_gate.read().await;
     let rc = service.rc.connection(&service.config).await?;
     let names = rc.call("config/listremotes", json!({})).await?;
     let mut items = Vec::new();
@@ -150,6 +151,7 @@ struct FileQuery {
 }
 async fn files(State(service): App, Query(query): Query<FileQuery>) -> ApiResult<Json<Value>> {
     validate_path(&query.path).map_err(ApiError::bad)?;
+    let _config = service.config_gate.read().await;
     let rc = service.rc.connection(&service.config).await?;
     let listed = rc
         .call("operations/list", json!({"fs":query.path,"remote":""}))
