@@ -979,3 +979,183 @@ dialog.overlay:not([open]) {
 dialog.overlay::backdrop {
   background: transparent;
 }
+
+.remote-list {
+  background: white;
+  border: 1px solid #dce5df;
+  border-radius: 7px;
+}
+.remote-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  border-bottom: 1px solid #edf1ee;
+}
+.remote-row:last-child {
+  border-bottom: 0;
+}
+.remote-row > svg {
+  flex-shrink: 0;
+  color: #648775;
+}
+.remote-row > div:first-of-type {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.remote-editor {
+  max-width: 780px;
+}
+.remote-editor h2 {
+  overflow-wrap: anywhere;
+}
+.config-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  gap: 20px;
+}
+.provider-picker {
+  display: grid;
+  gap: 12px;
+}
+.dialog .search-field {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+.search-field > svg {
+  position: absolute;
+  left: 12px;
+  color: #71877b;
+}
+.search-field > input {
+  padding-left: 36px;
+}
+.config-toolbar {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+}
+.config-toolbar .search-field {
+  flex: 1;
+}
+.config-options {
+  display: grid;
+  gap: 0;
+}
+.config-option {
+  padding: 16px 0;
+  border-bottom: 1px solid #e6ece7;
+  min-width: 0;
+}
+.config-option:first-child {
+  padding-top: 0;
+}
+.option-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.option-value {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 8px;
+}
+.dialog .option-label {
+  flex-direction: row;
+  justify-content: space-between;
+  overflow-wrap: anywhere;
+}
+.required {
+  font-size: 10px;
+  color: #96633b;
+}
+.option-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.option-meta {
+  font-size: 10px;
+  color: #6e8376;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.option-removed .option-meta {
+  color: #a1483c;
+}
+.dialog .option-help {
+  border: 0;
+  padding: 8px 0 0;
+}
+.dialog .option-help summary {
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.dialog .option-help[open] summary {
+  margin-bottom: 8px;
+}
+.provider-help {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #526d5d;
+}
+.wizard-help {
+  background: #f4f7f5;
+  padding: 16px;
+  border-radius: 5px;
+  margin-bottom: 18px;
+  user-select: text;
+}
+.wizard-question {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.remote-editor footer {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.remote-editor footer > .hint {
+  margin-right: auto;
+}
+.custom-options .input-action {
+  margin-top: 16px;
+}
+@media (max-width: 600px) {
+  aside nav button {
+    padding: 10px 6px;
+    font-size: 11px;
+    gap: 5px;
+    min-width: 0;
+  }
+  .remote-row {
+    padding: 15px;
+    gap: 10px;
+  }
+  .config-toolbar {
+    gap: 10px;
+  }
+  .remote-editor .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .remote-editor select {
+    font-size: 12px;
+  }
+  .remote-editor .dialog footer button {
+    white-space: normal;
+  }
+  .option-actions button {
+    padding: 8px;
+    font-size: 11px;
+  }
+}

@@ -6,6 +6,7 @@ import {
   Boxes,
   Clock3,
   FolderOpen,
+  HardDrive,
   Plus,
   Play,
   Pencil,
@@ -29,10 +30,13 @@ import {
 } from "./api";
 import { TaskEditor } from "./TaskEditor";
 import { Files } from "./Files";
+import { Remotes } from "./Remotes";
 import { Modal } from "./Modal";
 import "./style.css";
 function App() {
-  const [view, setView] = useState<"tasks" | "runs" | "files">("tasks");
+  const [view, setView] = useState<"tasks" | "runs" | "files" | "remotes">(
+    "tasks",
+  );
   const [tasks, setTasks] = useState<Task[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [remotes, setRemotes] = useState<Remote[]>([]);
@@ -154,6 +158,7 @@ function App() {
               ["tasks", Boxes, "Tasks"],
               ["runs", Clock3, "Activity"],
               ["files", FolderOpen, "Files"],
+              ["remotes", HardDrive, "Remotes"],
             ] as const
           ).map(([id, Icon, label]) => (
             <button
@@ -189,7 +194,9 @@ function App() {
               ? "Activity"
               : view === "files"
                 ? "Files"
-                : "Tasks"}
+                : view === "remotes"
+                  ? "Remotes"
+                  : "Tasks"}
           </span>
           <span className="top-status">
             <span className="dot online" />
@@ -464,6 +471,9 @@ function App() {
               </div>
               <p className="hint">Showing the latest 500 runs.</p>
             </>
+          )}
+          {view === "remotes" && (
+            <Remotes remotes={remotes} onRemotesChange={setRemotes} />
           )}
           {view === "files" && (
             <Files
