@@ -1,209 +1,55 @@
 name: Build
-
 on:
   push:
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
-  macos:
-    name: macOS ${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            arch: arm64
-          - runner: macos-15-intel
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      - name: Materialize source
-        run: python3 scripts/materialize.py .build/source
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.12.0'
-          host: mac
-          target: desktop
-          arch: clang_64
-          cache: true
-      - name: Build DMG and application ZIP
-        env:
-          EXPECTED_ARCH: ${{ matrix.arch }}
-          MACOSX_DEPLOYMENT_TARGET: '14.4'
-        run: |
-          test "$(uname -m)" = "$EXPECTED_ARCH"
-          export QT_PREFIX="$QT_ROOT_DIR"
-          env -u QT_PLUGIN_PATH -u QML2_IMPORT_PATH -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH \
-            bash .build/source/scripts/release_macOS.sh
-          binary=.build/source/build/build/rclone-browser.app/Contents/MacOS/rclone-browser
-          file "$binary"
-          test "$(lipo -archs "$binary")" = "$EXPECTED_ARCH"
-          otool -L "$binary"
-          codesign --verify --deep --strict .build/source/build/build/rclone-browser.app
-      - name: Run source and package tests
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir .build/source/build --output-on-failure --parallel 3
-      - name: Upload macOS build
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: RcloneBrowserNG-macos-${{ matrix.arch }}-${{ github.sha }}
-          path: |
-            .build/source/release/*.dmg
-            .build/source/release/*.app.zip
-          if-no-files-found: error
-
-  docker:
-    name: Docker ${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            arch: amd64
-            machine: x86_64
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-            machine: aarch64
-    runs-on: ${{ matrix.runner }}
-    env:
-      IMAGE: rclonebrowserng:${{ github.sha }}-${{ matrix.arch }}
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      - name: Materialize source
-        run: python3 scripts/materialize.py .build/source
-      - name: Set up Docker build
-        uses: docker/setup-buildx-action@v4.4.1
-      - name: Build native image and run source tests
-        env:
-          EXPECTED_MACHINE: ${{ matrix.machine }}
-          TARGET_ARCH: ${{ matrix.arch }}
-        run: |
-          test "$(uname -m)" = "$EXPECTED_MACHINE"
-          docker buildx build --platform "linux/$TARGET_ARCH" --load --tag "$IMAGE" .
-          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = "$TARGET_ARCH"
-          docker run --rm --entrypoint /usr/local/bin/rclone-browser \
-            --env QT_QPA_PLATFORM=offscreen "$IMAGE" --version
-          docker run --rm --entrypoint /usr/local/bin/rclone "$IMAGE" version
-      - name: Verify GUI, mapped user, transfer and persistence
-        run: |
-          mkdir -p .build/smoke/config .build/smoke/media .build/docker
-          sudo chown -R 1234:1234 .build/smoke
-          docker run --detach --name browser-smoke \
-            --publish 127.0.0.1:5800:5800 \
-            --env USER_ID=1234 --env GROUP_ID=1234 --env TZ=Etc/UTC \
-            --volume "$PWD/.build/smoke/config:/config" \
-            --volume "$PWD/.build/smoke/media:/media" "$IMAGE"
-          # Inspection tools are installed only in this disposable smoke container.
-          docker exec browser-smoke sh -ec \
-            'apt-get update && apt-get install -y --no-install-recommends xdotool x11-utils imagemagick'
-
-          gui_ready() {
-            curl --fail --silent --output /dev/null http://127.0.0.1:5800/ &&
-            docker exec --user 1234:1234 --env DISPLAY=:0 browser-smoke sh -ec '
-              window=$(xdotool search --onlyvisible --name "^Rclone Browser NG$" | head -n 1)
-              test -n "$window"
-              pid=$(xdotool getwindowpid "$window")
-              test "$(readlink "/proc/$pid/exe")" = /usr/local/bin/rclone-browser
-              test "$(stat -c %u "/proc/$pid")" = 1234
-              test "$(stat -c %g "/proc/$pid")" = 1234
-              xwininfo -id "$window" | grep -q "Map State: IsViewable"
-            '
-          }
-          wait_for_gui() {
-            for attempt in {1..60}; do
-              if gui_ready; then return 0; fi
-              sleep 2
-            done
-            return 1
-          }
-          wait_for_gui
-          docker exec --user 1234:1234 --env DISPLAY=:0 browser-smoke sh -ec '
-            window=$(xdotool search --onlyvisible --name "^Rclone Browser NG$" | head -n 1)
-            import -window "$window" /tmp/rclonebrowserng.png
-            test "$(identify -format "%k" /tmp/rclonebrowserng.png)" -gt 16
-          '
-          docker cp browser-smoke:/tmp/rclonebrowserng.png .build/docker/gui.png
-
-          docker exec --user 1234:1234 --env HOME=/config \
-            --env XDG_CONFIG_HOME=/config/xdg/config browser-smoke sh -ec '
-              rclone config create smoke local
-              printf "RcloneBrowserNG mapped transfer\n" > /media/input.txt
-              rclone copyto /media/input.txt smoke:/media/output.txt
-              cmp /media/input.txt /media/output.txt
-              test "$(stat -c %u:%g /media/output.txt)" = 1234:1234
-              test -s "$XDG_CONFIG_HOME/rclone-browser/rclone-browser.conf"
-              grep -q "^rclone=/usr/local/bin/rclone$" "$XDG_CONFIG_HOME/rclone-browser/rclone-browser.conf"
-            '
-          docker restart browser-smoke
-          wait_for_gui
-          docker exec --user 1234:1234 --env HOME=/config \
-            --env XDG_CONFIG_HOME=/config/xdg/config browser-smoke sh -ec '
-              rclone config show smoke | grep -q "^type = local$"
-              grep -q "^rclone=/usr/local/bin/rclone$" "$XDG_CONFIG_HOME/rclone-browser/rclone-browser.conf"
-              rclone copyto smoke:/media/output.txt /media/after-restart.txt
-              cmp /media/input.txt /media/after-restart.txt
-              test "$(stat -c %u:%g /media/after-restart.txt)" = 1234:1234
-            '
-      - name: Capture container logs
-        if: always()
-        run: |
-          mkdir -p .build/docker
-          if docker container inspect browser-smoke >/dev/null 2>&1; then
-            docker logs browser-smoke > .build/docker/container.log 2>&1
-            docker rm --force browser-smoke
-          fi
-      - name: Export Docker-loadable image
-        run: docker save "$IMAGE" | gzip -1 > .build/docker/RcloneBrowserNG-docker-${{ matrix.arch }}.tar.gz
-      - name: Upload Docker build
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: RcloneBrowserNG-docker-${{ matrix.arch }}-${{ github.sha }}
-          path: .build/docker/*.tar.gz
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-      - name: Upload GUI smoke evidence
-        if: always()
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: RcloneBrowserNG-docker-smoke-${{ matrix.arch }}-${{ github.sha }}
-          path: |
-            .build/docker/gui.png
-            .build/docker/container.log
-          retention-days: 7
-
-  release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: macos
+  test:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/checkout@v7.0.1
         with:
-          pattern: RcloneBrowserNG-macos-*
-          path: release
-          merge-multiple: true
-      - name: Publish verified macOS packages
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web build
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - name: Install transfer engine
+        run: sudo apt-get update && sudo apt-get install -y rclone
+      - run: cargo test --locked --test rclone_workflow -- --ignored
+  docker:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build service image
+        run: docker build -t rclonebrowserng:check .
+      - name: Verify HTTP service and bundled assets
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release/*.dmg release/*.app.zip --clobber
-          else
-            gh release create "$RELEASE_TAG" release/*.dmg release/*.app.zip --verify-tag \
-              --title "$RELEASE_TAG" --notes "macOS 14.4 or newer. Native Apple Silicon and Intel packages; ad-hoc signed."
-          fi
+          docker run -d --name browser-smoke -p 127.0.0.1:8080:8080 rclonebrowserng:check
+          for attempt in $(seq 1 30); do
+            if curl --fail http://127.0.0.1:8080/api/health; then break; fi
+            sleep 1
+          done
+          curl --fail http://127.0.0.1:8080/api/health
+          curl --fail http://127.0.0.1:8080/ | grep 'Rclone Browser NG'
+          docker exec browser-smoke rclone version
+          docker stop --time 15 browser-smoke
+      - name: Container logs
+        if: always()
+        run: docker logs browser-smoke

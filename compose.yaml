@@ -3,11 +3,10 @@ services:
     image: rclonebrowserng:local
     build: .
     ports:
-      - "${WEB_PORT:-5800}:5800"
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
     environment:
-      USER_ID: "${USER_ID:-1000}"
-      GROUP_ID: "${GROUP_ID:-1000}"
-      TZ: "${TZ:-Etc/UTC}"
+      RUST_LOG: "${RUST_LOG:-rclone_browser_ng=info}"
     volumes:
       - "${CONFIG_DIR:-./config}:/config"
       - "${MEDIA_DIR:-./media}:/media"
+    stop_grace_period: 15s
