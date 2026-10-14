@@ -33,17 +33,33 @@ jobs:
           sudo install /tmp/rclone/rclone-v1.75.2-linux-amd64/rclone /usr/local/bin/rclone
       - run: cargo test --locked --test rclone_workflow -- --ignored
   docker:
+    needs: test
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Build service image
-        run: docker build -t rclonebrowserng:check .
+        run: |
+          docker build -t rclonebrowserng:check \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=sha-$GITHUB_SHA" .
+      - name: Verify image architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: test "$(docker image inspect rclonebrowserng:check --format '{{.Os}}/{{.Architecture}}')" = "linux/$EXPECTED_ARCH"
       - name: Verify HTTP service and bundled assets
         run: |
           docker run -d --name browser-smoke -p 127.0.0.1:8080:8080 rclonebrowserng:check
@@ -55,6 +71,38 @@ jobs:
           curl --fail http://127.0.0.1:8080/ | grep 'Rclone Browser NG'
           docker exec browser-smoke rclone version
           docker stop --time 15 browser-smoke
+      - name: Publish tested architecture image
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:sha-$GITHUB_SHA-$IMAGE_ARCH"
+          docker tag rclonebrowserng:check "$image"
+          docker push "$image"
       - name: Container logs
         if: always()
         run: docker logs browser-smoke
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [test, docker]
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Publish multi-platform image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create \
+            --tag "$image:sha-$GITHUB_SHA" \
+            --tag "$image:latest" \
+            "$image:sha-$GITHUB_SHA-amd64" \
+            "$image:sha-$GITHUB_SHA-arm64"
+          for tag in "sha-$GITHUB_SHA" latest; do
+            docker buildx imagetools inspect --raw "$image:$tag" \
+              | jq --exit-status '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort == ["linux/amd64", "linux/arm64"]'
+          done
