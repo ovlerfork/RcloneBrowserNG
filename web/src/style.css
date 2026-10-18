@@ -743,6 +743,119 @@ progress {
 .selection-banner > div {
   display: flex;
   gap: 7px;
+  flex-wrap: wrap;
+}
+.folder-picker {
+  max-width: 860px;
+}
+.folder-picker .path-bar {
+  display: flex;
+  gap: 6px;
+}
+.file-selection,
+.selection-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: #587262;
+}
+.file-table {
+  table-layout: fixed;
+}
+.file-table .selection-cell {
+  width: 46px;
+  padding-right: 0;
+}
+.selection-cell input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  accent-color: #286e51;
+  cursor: pointer;
+}
+.file-table .file-size {
+  width: 95px;
+}
+.file-table .file-modified {
+  width: 185px;
+}
+.file-table th[aria-label="Actions"] {
+  width: 110px;
+}
+.file-table tr.selected {
+  background: #f0f7f2;
+}
+.file-table .file-name {
+  width: 100%;
+  justify-content: flex-start;
+}
+.file-table .actions {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.file-table .actions .icon {
+  padding: 6px;
+}
+.folder-selection {
+  margin-top: 6px;
+}
+.selection-heading {
+  margin-bottom: 9px;
+}
+.selection-heading button {
+  padding: 5px 8px;
+  font-size: 11px;
+}
+.selected-folders {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  max-height: 150px;
+  overflow: auto;
+}
+.selected-folders li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f0f5f2;
+  border-radius: 4px;
+  padding: 6px 9px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.selected-folders svg {
+  flex-shrink: 0;
+}
+.selection-summary,
+.route p.selection-summary {
+  font-family: inherit;
+  font-size: 11px;
+  color: #587262;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.segmented {
+  display: flex;
+  border-bottom: 1px solid #dce4df;
+}
+.segmented button {
+  flex: 1;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+}
+.segmented button[aria-pressed="true"] {
+  border-bottom-color: #236b51;
+  color: #236b51;
+  background: #f0f5f2;
 }
 @media (min-width: 1450px) {
   .content {
@@ -940,6 +1053,27 @@ progress {
   .selection-banner {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .file-table .file-modified {
+    display: none;
+  }
+  .file-table .file-size {
+    width: 65px;
+  }
+  .file-table .selection-cell {
+    width: 36px;
+  }
+  .file-table th[aria-label="Actions"] {
+    width: 90px;
+  }
+  .file-selection .actions {
+    width: 100%;
+  }
+  .file-selection .primary {
+    margin-left: auto;
+  }
+  .folder-picker .path-bar {
+    gap: 3px;
   }
   .locations .hint {
     display: none;

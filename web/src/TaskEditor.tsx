@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Modal } from "./Modal";
-import { X, FolderOpen } from "lucide-react";
+import { Files } from "./Files";
+import { X, Folder, FolderOpen } from "lucide-react";
 import {
   api,
   blankTask,
@@ -8,6 +9,8 @@ import {
   type Task,
   type TaskInput,
   type Operation,
+  type Remote,
+  type Run,
 } from "./api";
 export const operationText: Record<Operation, string> = {
   copy: "Copy files. Keep extra destination files.",
@@ -25,25 +28,30 @@ const presets = [
 export function TaskEditor({
   task,
   initial,
+  transfer = false,
+  remotes,
   onClose,
   onSaved,
-  onBrowse,
 }: {
   task?: Task;
   initial?: TaskInput;
+  transfer?: boolean;
+  remotes: Remote[];
   onClose: () => void;
-  onSaved: () => void;
-  onBrowse: (field: "source" | "destination", draft: TaskInput) => void;
+  onSaved: (run?: Run) => void;
 }) {
   const [draft, setDraft] = useState<TaskInput>(
     initial || (task ? taskInput(task) : blankTask()),
   );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"run" | "save">(transfer ? "run" : "save");
+  const [picker, setPicker] = useState<"source" | "destination" | null>(null);
   const [custom, setCustom] = useState(
     !!draft.schedule && !presets.some(([v]) => v === draft.schedule),
   );
   const locked = task?.operation === "bisync";
+  const grouped = draft.selected_folders.length > 0;
   const change = <K extends keyof TaskInput>(key: K, value: TaskInput[K]) =>
     setDraft({ ...draft, [key]: value });
   async function save(event: React.FormEvent) {
@@ -51,7 +59,7 @@ export function TaskEditor({
     setBusy(true);
     setError("");
     try {
-      await api(task ? `/tasks/${task.id}` : "/tasks", task ? "PUT" : "POST", {
+      const input = {
         ...draft,
         options: {
           ...draft.options,
@@ -59,27 +67,99 @@ export function TaskEditor({
             (pattern) => pattern.length > 0,
           ),
         },
-      });
-      onSaved();
+      };
+      if (mode === "run")
+        onSaved(
+          await api<Run>("/transfers", "POST", {
+            ...input,
+            schedule: null,
+            enabled: false,
+          }),
+        );
+      else {
+        await api(
+          task ? `/tasks/${task.id}` : "/tasks",
+          task ? "PUT" : "POST",
+          input,
+        );
+        onSaved();
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
+  if (picker)
+    return (
+      <Modal onClose={() => setPicker(null)} title="folder-picker-title">
+        <section className="dialog folder-picker">
+          <Files
+            remotes={remotes}
+            picker={{
+              field: picker,
+              path: draft[picker],
+              selectedFolders:
+                picker === "source" ? draft.selected_folders : [],
+              requireSelection: picker === "source" && grouped,
+              select: (path, folders) => {
+                setDraft({
+                  ...draft,
+                  [picker]: path,
+                  ...(picker === "source" ? { selected_folders: folders } : {}),
+                });
+                setPicker(null);
+              },
+              cancel: () => setPicker(null),
+            }}
+          />
+        </section>
+      </Modal>
+    );
   return (
-    <Modal onClose={onClose} title="editor-title">
+    <Modal onClose={() => !busy && onClose()} title="editor-title">
       <section className="dialog" aria-labelledby="editor-title">
         <header>
           <div>
             <p className="eyebrow">TRANSFER TASK</p>
-            <h2 id="editor-title">{task ? "Edit task" : "New task"}</h2>
+            <h2 id="editor-title">
+              {task ? "Edit task" : transfer ? "Transfer folders" : "New task"}
+            </h2>
           </div>
-          <button className="icon" onClick={onClose} title="Close">
+          <button
+            className="icon"
+            onClick={onClose}
+            title="Close"
+            disabled={busy}
+          >
             <X size={20} />
           </button>
         </header>
         <form onSubmit={save}>
+          {transfer && !task && (
+            <div
+              className="segmented"
+              role="group"
+              aria-label="Transfer action"
+            >
+              <button
+                type="button"
+                aria-pressed={mode === "run"}
+                disabled={busy || draft.operation === "bisync"}
+                onClick={() => setMode("run")}
+              >
+                Run now
+              </button>
+              <button
+                type="button"
+                aria-pressed={mode === "save"}
+                disabled={busy}
+                onClick={() => setMode("save")}
+              >
+                Save as task
+              </button>
+            </div>
+          )}
           <label>
             Name
             <input
@@ -109,12 +189,18 @@ export function TaskEditor({
               <option value="move">Move</option>
               <option
                 value="bisync"
-                disabled={!!task && task.operation !== "bisync"}
+                disabled={
+                  mode === "run" || (!!task && task.operation !== "bisync")
+                }
               >
                 Bisync
               </option>
             </select>
-            <span className="hint">{operationText[draft.operation]}</span>
+            <span className="hint">
+              {grouped && draft.operation === "sync"
+                ? "Make the selected destination folders match their sources. Extra files inside those folders will be deleted."
+                : operationText[draft.operation]}
+            </span>
           </label>
           {(["source", "destination"] as const).map((field) => (
             <label key={field}>
@@ -123,6 +209,7 @@ export function TaskEditor({
                 <input
                   required
                   disabled={locked}
+                  readOnly={field === "source" && grouped}
                   placeholder="remote:folder or /media/folder"
                   value={draft[field]}
                   onChange={(e) => change(field, e.target.value)}
@@ -132,11 +219,35 @@ export function TaskEditor({
                   className="icon"
                   disabled={locked}
                   title={`Browse ${field}`}
-                  onClick={() => onBrowse(field, draft)}
+                  onClick={() => setPicker(field)}
                 >
                   <FolderOpen size={18} />
                 </button>
               </div>
+              {field === "source" && grouped && (
+                <div className="folder-selection">
+                  <div className="selection-heading">
+                    <span>
+                      {draft.selected_folders.length} selected folders
+                    </span>
+                    <button
+                      type="button"
+                      disabled={locked}
+                      onClick={() => setPicker("source")}
+                    >
+                      Edit selection
+                    </button>
+                  </div>
+                  <ul className="selected-folders">
+                    {draft.selected_folders.map((name) => (
+                      <li key={name}>
+                        <Folder size={15} />
+                        {name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </label>
           ))}
           {locked && (
@@ -145,38 +256,44 @@ export function TaskEditor({
               new task to change them.
             </p>
           )}
-          <div className="form-grid">
-            <label>
-              Schedule · UTC
-              <select
-                value={custom ? "custom" : draft.schedule || ""}
-                onChange={(e) => {
-                  setCustom(e.target.value === "custom");
-                  change(
-                    "schedule",
-                    e.target.value === "custom" ? "" : e.target.value || null,
-                  );
-                }}
-              >
-                {presets.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-                <option value="custom">Custom cron</option>
-              </select>
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={draft.enabled}
-                disabled={!draft.schedule}
-                onChange={(e) => change("enabled", e.target.checked)}
-              />
-              Schedule enabled
-            </label>
-          </div>
-          {custom && (
+          {mode === "save" && (
+            <div className="form-grid">
+              <label>
+                Schedule · UTC
+                <select
+                  value={custom ? "custom" : draft.schedule || ""}
+                  onChange={(e) => {
+                    setCustom(e.target.value === "custom");
+                    setDraft({
+                      ...draft,
+                      schedule:
+                        e.target.value === "custom"
+                          ? ""
+                          : e.target.value || null,
+                      enabled: !!e.target.value,
+                    });
+                  }}
+                >
+                  {presets.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                  <option value="custom">Custom cron</option>
+                </select>
+              </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={draft.enabled}
+                  disabled={!draft.schedule}
+                  onChange={(e) => change("enabled", e.target.checked)}
+                />
+                Schedule enabled
+              </label>
+            </div>
+          )}
+          {mode === "save" && custom && (
             <label>
               Cron expression · UTC
               <input
@@ -191,7 +308,7 @@ export function TaskEditor({
             <summary>Transfer options</summary>
             <div className="form-grid">
               <label>
-                Transfers
+                Concurrent file transfers
                 <input
                   type="number"
                   min="1"
@@ -257,7 +374,7 @@ export function TaskEditor({
               checked={draft.dry_run}
               onChange={(e) => change("dry_run", e.target.checked)}
             />
-            Dry run by default
+            {mode === "run" ? "Dry run" : "Dry run by default"}
           </label>
           {draft.operation !== "copy" && (
             <label className="check warning">
@@ -279,11 +396,17 @@ export function TaskEditor({
             </p>
           )}
           <footer>
-            <button type="button" onClick={onClose}>
+            <button type="button" onClick={onClose} disabled={busy}>
               Cancel
             </button>
             <button className="primary" disabled={busy}>
-              {busy ? "Saving…" : "Save task"}
+              {busy
+                ? mode === "run"
+                  ? "Starting…"
+                  : "Saving…"
+                : mode === "run"
+                  ? "Start transfer"
+                  : "Save task"}
             </button>
           </footer>
         </form>

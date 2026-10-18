@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal } from "./Modal";
 import {
   Folder,
@@ -29,15 +29,26 @@ function crumbs(path: string) {
 }
 export function Files({
   remotes,
-  choose,
-  cancelChoose,
+  picker,
+  onTransfer,
 }: {
   remotes: Remote[];
-  choose?: { field: string; select: (path: string) => void };
-  cancelChoose: () => void;
+  picker?: {
+    field: "source" | "destination";
+    path: string;
+    selectedFolders: string[];
+    requireSelection: boolean;
+    select: (path: string, folders: string[]) => void;
+    cancel: () => void;
+  };
+  onTransfer?: (path: string, folders: string[]) => void;
 }) {
-  const [path, setPath] = useState("/media");
-  const [input, setInput] = useState("/media");
+  const [path, setPath] = useState(picker?.path || "/media");
+  const [input, setInput] = useState(path);
+  const [selected, setSelected] = useState<string[]>(
+    picker?.selectedFolders || [],
+  );
+  const selectAll = useRef<HTMLInputElement>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -49,12 +60,14 @@ export function Files({
   } | null>(null);
   const [value, setValue] = useState("");
   function go(next: string) {
+    if (next !== path) setSelected([]);
     setPath(next);
     setInput(next);
   }
   useEffect(() => {
     let valid = true;
     setLoading(true);
+    setEntries([]);
     setError("");
     api<Entry[]>(`/files?path=${encodeURIComponent(path)}`)
       .then((data) => {
@@ -81,6 +94,15 @@ export function Files({
     };
   }, [path, revision]);
   const trail = crumbs(path);
+  const selectable = picker?.field !== "destination";
+  const folders = entries.filter((entry) => entry.is_dir);
+  const allSelected =
+    folders.length > 0 &&
+    folders.every((entry) => selected.includes(entry.name));
+  useEffect(() => {
+    if (selectAll.current)
+      selectAll.current.indeterminate = selected.length > 0 && !allSelected;
+  }, [selected, allSelected]);
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!mutation) return;
@@ -88,9 +110,11 @@ export function Files({
     setError("");
     try {
       const entry = mutation.entry;
-      if (mutation.kind === "mkdir")
-        await api("/files/mkdir", "POST", { path: join(path, value) });
-      else if (mutation.kind === "delete" && entry)
+      if (mutation.kind === "mkdir") {
+        const created = join(path, value);
+        await api("/files/mkdir", "POST", { path: created });
+        if (picker) go(created);
+      } else if (mutation.kind === "delete" && entry)
         await api("/files/delete", "POST", {
           path: entry.path,
           is_dir: entry.is_dir,
@@ -116,7 +140,11 @@ export function Files({
       <div className="section-heading">
         <div>
           <p className="eyebrow">STORAGE</p>
-          <h1>File browser</h1>
+          {picker ? (
+            <h2 id="folder-picker-title">Choose {picker.field}</h2>
+          ) : (
+            <h1>File browser</h1>
+          )}
         </div>
         <button
           onClick={() => {
@@ -129,13 +157,25 @@ export function Files({
           New folder
         </button>
       </div>
-      {choose && (
+      {picker && (
         <div className="selection-banner">
-          <span>Select task {choose.field}</span>
+          <span>
+            {selectable && selected.length
+              ? `${selected.length} folders selected`
+              : `Select ${picker.field} folder`}
+          </span>
           <div>
-            <button onClick={cancelChoose}>Cancel</button>
-            <button className="primary" onClick={() => choose.select(path)}>
-              Use this folder
+            <button onClick={picker.cancel}>Cancel</button>
+            <button
+              className="primary"
+              disabled={
+                loading || (picker.requireSelection && !selected.length)
+              }
+              onClick={() => picker.select(path, selected)}
+            >
+              {selectable && (selected.length || picker.requireSelection)
+                ? "Use selected folders"
+                : "Use this folder"}
             </button>
           </div>
         </div>
@@ -192,6 +232,26 @@ export function Files({
           </button>
         ))}
       </nav>
+      {selectable && (
+        <div className="file-selection">
+          <span>{selected.length} folders selected</span>
+          <div className="actions">
+            <button onClick={() => setSelected([])} disabled={!selected.length}>
+              Clear
+            </button>
+            {!picker && (
+              <button
+                className="primary"
+                disabled={!selected.length || loading}
+                onClick={() => onTransfer?.(path, selected)}
+              >
+                <ArrowRight size={16} />
+                Transfer
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {error && (
         <p role="alert" className="error">
           {error}
@@ -201,18 +261,59 @@ export function Files({
         <div className="empty">Loading files…</div>
       ) : (
         <div className="table-wrap">
-          <table>
+          <table className="file-table">
             <thead>
               <tr>
+                {selectable && (
+                  <th className="selection-cell">
+                    <input
+                      ref={selectAll}
+                      type="checkbox"
+                      aria-label="Select all folders"
+                      checked={allSelected}
+                      disabled={!folders.length}
+                      onChange={(event) =>
+                        setSelected(
+                          event.target.checked
+                            ? folders.map((entry) => entry.name)
+                            : [],
+                        )
+                      }
+                    />
+                  </th>
+                )}
                 <th>Name</th>
-                <th>Size</th>
-                <th>Modified</th>
-                <th aria-label="Actions" />
+                <th className="file-size">Size</th>
+                <th className="file-modified">Modified</th>
+                {!picker && <th aria-label="Actions" />}
               </tr>
             </thead>
             <tbody>
               {entries.map((entry) => (
-                <tr key={entry.path}>
+                <tr
+                  key={entry.path}
+                  className={selected.includes(entry.name) ? "selected" : ""}
+                >
+                  {selectable && (
+                    <td className="selection-cell">
+                      {entry.is_dir && (
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${entry.name}`}
+                          checked={selected.includes(entry.name)}
+                          onChange={(event) =>
+                            setSelected(
+                              event.target.checked
+                                ? [...selected, entry.name]
+                                : selected.filter(
+                                    (name) => name !== entry.name,
+                                  ),
+                            )
+                          }
+                        />
+                      )}
+                    </td>
+                  )}
                   <td>
                     {entry.is_dir ? (
                       <button
@@ -229,29 +330,33 @@ export function Files({
                       </span>
                     )}
                   </td>
-                  <td>{entry.is_dir ? "—" : bytes(entry.size)}</td>
-                  <td>{date(entry.modified)}</td>
-                  <td>
-                    <div className="actions">
-                      <button
-                        className="icon"
-                        title={`Move ${entry.name}`}
-                        onClick={() => {
-                          setMutation({ kind: "move", entry });
-                          setValue(entry.path);
-                        }}
-                      >
-                        <ArrowRight size={16} />
-                      </button>
-                      <button
-                        className="icon danger"
-                        title={`Delete ${entry.name}`}
-                        onClick={() => setMutation({ kind: "delete", entry })}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
+                  <td className="file-size">
+                    {entry.is_dir ? "—" : bytes(entry.size)}
                   </td>
+                  <td className="file-modified">{date(entry.modified)}</td>
+                  {!picker && (
+                    <td>
+                      <div className="actions">
+                        <button
+                          className="icon"
+                          title={`Move ${entry.name}`}
+                          onClick={() => {
+                            setMutation({ kind: "move", entry });
+                            setValue(entry.path);
+                          }}
+                        >
+                          <ArrowRight size={16} />
+                        </button>
+                        <button
+                          className="icon danger"
+                          title={`Delete ${entry.name}`}
+                          onClick={() => setMutation({ kind: "delete", entry })}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

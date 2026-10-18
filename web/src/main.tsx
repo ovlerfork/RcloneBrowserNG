@@ -21,6 +21,7 @@ import {
   active,
   bytes,
   date,
+  blankTask,
   taskInput,
   type Task,
   type TaskInput,
@@ -47,11 +48,7 @@ function App() {
   const [editor, setEditor] = useState<{
     task?: Task;
     initial?: TaskInput;
-  } | null>(null);
-  const [picker, setPicker] = useState<{
-    field: "source" | "destination";
-    draft: TaskInput;
-    task?: Task;
+    transfer?: boolean;
   } | null>(null);
   const [detail, setDetail] = useState<Run | null>(null);
   const [filter, setFilter] = useState("");
@@ -309,6 +306,11 @@ function App() {
                           <div>
                             <span>SOURCE</span>
                             <p>{task.source}</p>
+                            {!!task.selected_folders?.length && (
+                              <p className="selection-summary">
+                                {task.selected_folders.length} selected folders
+                              </p>
+                            )}
                           </div>
                           <ArrowRight size={18} />
                           <div>
@@ -441,6 +443,8 @@ function App() {
                               : run.resync
                                 ? "initialization"
                                 : run.trigger}
+                            {!!run.selected_folders?.length &&
+                              ` · ${run.selected_folders.length} folders`}
                           </span>
                         </td>
                         <td>
@@ -478,27 +482,17 @@ function App() {
           {view === "files" && (
             <Files
               remotes={remotes}
-              choose={
-                picker
-                  ? {
-                      field: picker.field,
-                      select: (path) => {
-                        setEditor({
-                          task: picker.task,
-                          initial: { ...picker.draft, [picker.field]: path },
-                        });
-                        setPicker(null);
-                        setView("tasks");
-                      },
-                    }
-                  : undefined
+              onTransfer={(path, folders) =>
+                setEditor({
+                  transfer: true,
+                  initial: {
+                    ...blankTask(),
+                    name: `Transfer ${folders.length} folders`,
+                    source: path,
+                    selected_folders: folders,
+                  },
+                })
               }
-              cancelChoose={() => {
-                if (picker)
-                  setEditor({ task: picker.task, initial: picker.draft });
-                setPicker(null);
-                setView("tasks");
-              }}
             />
           )}
         </div>
@@ -507,15 +501,17 @@ function App() {
         <TaskEditor
           task={editor.task}
           initial={editor.initial}
+          transfer={editor.transfer}
+          remotes={remotes}
           onClose={() => setEditor(null)}
-          onSaved={() => {
+          onSaved={(run) => {
             setEditor(null);
+            setView(run ? "runs" : "tasks");
+            if (run) {
+              setFilter("");
+              setDetail(run);
+            }
             void perform(refresh);
-          }}
-          onBrowse={(field, draft) => {
-            setPicker({ field, draft, task: editor.task });
-            setEditor(null);
-            setView("files");
           }}
         />
       )}
@@ -556,6 +552,12 @@ function App() {
               <br />
               {detail.destination}
             </p>
+            {!!detail.selected_folders?.length && (
+              <p className="selection-summary">
+                {detail.selected_folders.length} selected folders:{" "}
+                {detail.selected_folders.join(", ")}
+              </p>
+            )}
             <div className="run-metrics">
               <div>
                 <span>Transferred</span>
