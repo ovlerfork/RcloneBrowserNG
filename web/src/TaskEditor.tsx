@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Modal } from "./Modal";
 import { Files } from "./Files";
-import { X, Folder, FolderOpen } from "lucide-react";
+import { X, Folder, File, FolderOpen } from "lucide-react";
 import {
   api,
   blankTask,
@@ -51,7 +51,9 @@ export function TaskEditor({
     !!draft.schedule && !presets.some(([v]) => v === draft.schedule),
   );
   const locked = task?.operation === "bisync";
-  const grouped = draft.selected_folders.length > 0;
+  const selectedCount =
+    draft.selected_folders.length + draft.selected_files.length;
+  const grouped = selectedCount > 0;
   const change = <K extends keyof TaskInput>(key: K, value: TaskInput[K]) =>
     setDraft({ ...draft, [key]: value });
   async function save(event: React.FormEvent) {
@@ -99,14 +101,34 @@ export function TaskEditor({
             picker={{
               field: picker,
               path: draft[picker],
-              selectedFolders:
-                picker === "source" ? draft.selected_folders : [],
+              selected:
+                picker === "source"
+                  ? [
+                      ...draft.selected_folders.map((name) => ({
+                        name,
+                        is_dir: true,
+                      })),
+                      ...draft.selected_files.map((name) => ({
+                        name,
+                        is_dir: false,
+                      })),
+                    ]
+                  : [],
               requireSelection: picker === "source" && grouped,
-              select: (path, folders) => {
+              select: (path, entries) => {
                 setDraft({
                   ...draft,
                   [picker]: path,
-                  ...(picker === "source" ? { selected_folders: folders } : {}),
+                  ...(picker === "source"
+                    ? {
+                        selected_folders: entries
+                          .filter((entry) => entry.is_dir)
+                          .map((entry) => entry.name),
+                        selected_files: entries
+                          .filter((entry) => !entry.is_dir)
+                          .map((entry) => entry.name),
+                      }
+                    : {}),
                 });
                 setPicker(null);
               },
@@ -123,7 +145,7 @@ export function TaskEditor({
           <div>
             <p className="eyebrow">TRANSFER TASK</p>
             <h2 id="editor-title">
-              {task ? "Edit task" : transfer ? "Transfer folders" : "New task"}
+              {task ? "Edit task" : transfer ? "Transfer items" : "New task"}
             </h2>
           </div>
           <button
@@ -198,7 +220,7 @@ export function TaskEditor({
             </select>
             <span className="hint">
               {grouped && draft.operation === "sync"
-                ? "Make the selected destination folders match their sources. Extra files inside those folders will be deleted."
+                ? "Match selected files and folders at the destination. Extra files inside selected folders will be deleted. Other destination items are kept."
                 : operationText[draft.operation]}
             </span>
           </label>
@@ -228,7 +250,7 @@ export function TaskEditor({
                 <div className="folder-selection">
                   <div className="selection-heading">
                     <span>
-                      {draft.selected_folders.length} selected folders
+                      {selectedCount} selected items
                     </span>
                     <button
                       type="button"
@@ -240,8 +262,14 @@ export function TaskEditor({
                   </div>
                   <ul className="selected-folders">
                     {draft.selected_folders.map((name) => (
-                      <li key={name}>
+                      <li key={`folder:${name}`}>
                         <Folder size={15} />
+                        {name}
+                      </li>
+                    ))}
+                    {draft.selected_files.map((name) => (
+                      <li key={`file:${name}`}>
+                        <File size={15} />
                         {name}
                       </li>
                     ))}

@@ -306,9 +306,12 @@ function App() {
                           <div>
                             <span>SOURCE</span>
                             <p>{task.source}</p>
-                            {!!task.selected_folders?.length && (
+                            {(task.selected_folders.length > 0 ||
+                              task.selected_files.length > 0) && (
                               <p className="selection-summary">
-                                {task.selected_folders.length} selected folders
+                                {task.selected_folders.length +
+                                  task.selected_files.length}{" "}
+                                selected items
                               </p>
                             )}
                           </div>
@@ -443,8 +446,9 @@ function App() {
                               : run.resync
                                 ? "initialization"
                                 : run.trigger}
-                            {!!run.selected_folders?.length &&
-                              ` · ${run.selected_folders.length} folders`}
+                            {(run.selected_folders.length > 0 ||
+                              run.selected_files.length > 0) &&
+                              ` · ${run.selected_folders.length + run.selected_files.length} items`}
                           </span>
                         </td>
                         <td>
@@ -482,14 +486,19 @@ function App() {
           {view === "files" && (
             <Files
               remotes={remotes}
-              onTransfer={(path, folders) =>
+              onTransfer={(path, entries) =>
                 setEditor({
                   transfer: true,
                   initial: {
                     ...blankTask(),
-                    name: `Transfer ${folders.length} folders`,
+                    name: `Transfer ${entries.length} items`,
                     source: path,
-                    selected_folders: folders,
+                    selected_folders: entries
+                      .filter((entry) => entry.is_dir)
+                      .map((entry) => entry.name),
+                    selected_files: entries
+                      .filter((entry) => !entry.is_dir)
+                      .map((entry) => entry.name),
                   },
                 })
               }
@@ -552,10 +561,12 @@ function App() {
               <br />
               {detail.destination}
             </p>
-            {!!detail.selected_folders?.length && (
+            {(detail.selected_folders.length > 0 ||
+              detail.selected_files.length > 0) && (
               <p className="selection-summary">
-                {detail.selected_folders.length} selected folders:{" "}
-                {detail.selected_folders.join(", ")}
+                {detail.selected_folders.length + detail.selected_files.length}{" "}
+                selected items:{" "}
+                {[...detail.selected_folders, ...detail.selected_files].join(", ")}
               </p>
             )}
             <div className="run-metrics">

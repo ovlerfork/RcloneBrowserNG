@@ -54,6 +54,8 @@ pub struct TaskInput {
     pub source: String,
     #[serde(default)]
     pub selected_folders: Vec<String>,
+    #[serde(default)]
+    pub selected_files: Vec<String>,
     pub destination: String,
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -165,6 +167,8 @@ pub struct Run {
     pub source: String,
     #[serde(default)]
     pub selected_folders: Vec<String>,
+    #[serde(default)]
+    pub selected_files: Vec<String>,
     pub destination: String,
     pub dry_run: bool,
     pub resync: bool,
@@ -192,6 +196,7 @@ impl Run {
             operation: task.input.operation.clone(),
             source: task.input.source.clone(),
             selected_folders: task.input.selected_folders.clone(),
+            selected_files: task.input.selected_files.clone(),
             destination: task.input.destination.clone(),
             dry_run,
             resync,

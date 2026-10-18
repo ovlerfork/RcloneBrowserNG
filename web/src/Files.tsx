@@ -4,12 +4,16 @@ import {
   Folder,
   File,
   ArrowUp,
+  ArrowDown,
   RefreshCw,
   Plus,
   Trash2,
   ArrowRight,
 } from "lucide-react";
 import { api, bytes, date, type Entry, type Remote } from "./api";
+type SelectedEntry = Pick<Entry, "name" | "is_dir">;
+const entryKey = (entry: SelectedEntry) =>
+  `${entry.is_dir ? "folder" : "file"}:${entry.name}`;
 const join = (path: string, name: string) =>
   path + (path.endsWith("/") || path.endsWith(":") ? "" : "/") + name;
 function crumbs(path: string) {
@@ -36,20 +40,24 @@ export function Files({
   picker?: {
     field: "source" | "destination";
     path: string;
-    selectedFolders: string[];
+    selected: SelectedEntry[];
     requireSelection: boolean;
-    select: (path: string, folders: string[]) => void;
+    select: (path: string, entries: SelectedEntry[]) => void;
     cancel: () => void;
   };
-  onTransfer?: (path: string, folders: string[]) => void;
+  onTransfer?: (path: string, entries: SelectedEntry[]) => void;
 }) {
   const [path, setPath] = useState(picker?.path || "/media");
   const [input, setInput] = useState(path);
-  const [selected, setSelected] = useState<string[]>(
-    picker?.selectedFolders || [],
+  const [selected, setSelected] = useState<SelectedEntry[]>(
+    picker?.selected || [],
   );
   const selectAll = useRef<HTMLInputElement>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [query, setQuery] = useState("");
+  const [entryType, setEntryType] = useState("all");
+  const [sortBy, setSortBy] = useState("name");
+  const [ascending, setAscending] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
@@ -71,14 +79,7 @@ export function Files({
     setError("");
     api<Entry[]>(`/files?path=${encodeURIComponent(path)}`)
       .then((data) => {
-        if (valid)
-          setEntries(
-            data.sort(
-              (a, b) =>
-                Number(b.is_dir) - Number(a.is_dir) ||
-                a.name.localeCompare(b.name),
-            ),
-          );
+        if (valid) setEntries(data);
       })
       .catch((e) => {
         if (valid) {
@@ -95,14 +96,40 @@ export function Files({
   }, [path, revision]);
   const trail = crumbs(path);
   const selectable = picker?.field !== "destination";
-  const folders = entries.filter((entry) => entry.is_dir);
+  const visibleEntries = entries
+    .filter(
+      (entry) =>
+        entry.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()) &&
+        (selectable
+          ? entryType === "all" || entry.is_dir === (entryType === "folders")
+          : entry.is_dir),
+    )
+    .sort((a, b) => {
+      const compared =
+        sortBy === "size"
+          ? a.size - b.size
+          : sortBy === "modified"
+            ? (Date.parse(a.modified) || 0) - (Date.parse(b.modified) || 0)
+            : 0;
+      return (
+        Number(b.is_dir) - Number(a.is_dir) ||
+        (ascending ? 1 : -1) *
+          (compared ||
+            a.name.localeCompare(b.name, undefined, { numeric: true }))
+      );
+    });
+  const selectedKeys = new Set(selected.map(entryKey));
+  const visibleKeys = new Set(visibleEntries.map(entryKey));
+  const visibleSelected = visibleEntries.filter((entry) =>
+    selectedKeys.has(entryKey(entry)),
+  ).length;
+  const hiddenSelected = selected.length - visibleSelected;
   const allSelected =
-    folders.length > 0 &&
-    folders.every((entry) => selected.includes(entry.name));
+    visibleEntries.length > 0 && visibleSelected === visibleEntries.length;
   useEffect(() => {
     if (selectAll.current)
-      selectAll.current.indeterminate = selected.length > 0 && !allSelected;
-  }, [selected, allSelected]);
+      selectAll.current.indeterminate = visibleSelected > 0 && !allSelected;
+  }, [visibleSelected, allSelected, loading]);
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!mutation) return;
@@ -161,7 +188,7 @@ export function Files({
         <div className="selection-banner">
           <span>
             {selectable && selected.length
-              ? `${selected.length} folders selected`
+              ? `${selected.length} items selected`
               : `Select ${picker.field} folder`}
           </span>
           <div>
@@ -174,7 +201,7 @@ export function Files({
               onClick={() => picker.select(path, selected)}
             >
               {selectable && (selected.length || picker.requireSelection)
-                ? "Use selected folders"
+                ? "Use selected items"
                 : "Use this folder"}
             </button>
           </div>
@@ -232,9 +259,56 @@ export function Files({
           </button>
         ))}
       </nav>
+      <div className="file-tools">
+        <label className="file-filter">
+          Filter by name
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search this folder"
+          />
+        </label>
+        {selectable && (
+          <label>
+            Type
+            <select
+              value={entryType}
+              onChange={(event) => setEntryType(event.target.value)}
+            >
+              <option value="all">All items</option>
+              <option value="files">Files</option>
+              <option value="folders">Folders</option>
+            </select>
+          </label>
+        )}
+        <label>
+          Sort by
+          <select
+            value={sortBy}
+            onChange={(event) => setSortBy(event.target.value)}
+          >
+            <option value="name">Name</option>
+            {selectable && <option value="size">Size</option>}
+            <option value="modified">Modified</option>
+          </select>
+        </label>
+        <button
+          className="sort-direction"
+          title={ascending ? "Sort descending" : "Sort ascending"}
+          onClick={() => setAscending(!ascending)}
+        >
+          {ascending ? <ArrowUp size={18} /> : <ArrowDown size={18} />}
+        </button>
+      </div>
       {selectable && (
         <div className="file-selection">
-          <span>{selected.length} folders selected</span>
+          <span aria-live="polite">
+            {selected.length} items selected
+            {!loading && hiddenSelected > 0 && (
+              <span className="hint"> · {hiddenSelected} hidden</span>
+            )}
+          </span>
           <div className="actions">
             <button onClick={() => setSelected([])} disabled={!selected.length}>
               Clear
@@ -269,14 +343,23 @@ export function Files({
                     <input
                       ref={selectAll}
                       type="checkbox"
-                      aria-label="Select all folders"
+                      aria-label="Select all visible items"
                       checked={allSelected}
-                      disabled={!folders.length}
+                      disabled={!visibleEntries.length}
                       onChange={(event) =>
                         setSelected(
                           event.target.checked
-                            ? folders.map((entry) => entry.name)
-                            : [],
+                            ? [
+                                ...selected,
+                                ...visibleEntries
+                                  .filter(
+                                    (entry) => !selectedKeys.has(entryKey(entry)),
+                                  )
+                                  .map(({ name, is_dir }) => ({ name, is_dir })),
+                              ]
+                            : selected.filter(
+                                (entry) => !visibleKeys.has(entryKey(entry)),
+                              ),
                         )
                       }
                     />
@@ -289,29 +372,30 @@ export function Files({
               </tr>
             </thead>
             <tbody>
-              {entries.map((entry) => (
+              {visibleEntries.map((entry) => (
                 <tr
-                  key={entry.path}
-                  className={selected.includes(entry.name) ? "selected" : ""}
+                  key={entryKey(entry)}
+                  className={selectedKeys.has(entryKey(entry)) ? "selected" : ""}
                 >
                   {selectable && (
                     <td className="selection-cell">
-                      {entry.is_dir && (
-                        <input
-                          type="checkbox"
-                          aria-label={`Select ${entry.name}`}
-                          checked={selected.includes(entry.name)}
-                          onChange={(event) =>
-                            setSelected(
-                              event.target.checked
-                                ? [...selected, entry.name]
-                                : selected.filter(
-                                    (name) => name !== entry.name,
-                                  ),
-                            )
-                          }
-                        />
-                      )}
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${entry.name}`}
+                        checked={selectedKeys.has(entryKey(entry))}
+                        onChange={(event) =>
+                          setSelected(
+                            event.target.checked
+                              ? [
+                                  ...selected,
+                                  { name: entry.name, is_dir: entry.is_dir },
+                                ]
+                              : selected.filter(
+                                  (item) => entryKey(item) !== entryKey(entry),
+                                ),
+                          )
+                        }
+                      />
                     </td>
                   )}
                   <td>
@@ -361,8 +445,14 @@ export function Files({
               ))}
             </tbody>
           </table>
-          {!entries.length && !error && (
-            <div className="empty">This folder is empty.</div>
+          {!visibleEntries.length && !error && (
+            <div className="empty">
+              {!entries.length
+                ? "This folder is empty."
+                : selectable
+                  ? "No items match your filters."
+                  : "No matching folders."}
+            </div>
           )}
         </div>
       )}

@@ -752,6 +752,32 @@ progress {
   display: flex;
   gap: 6px;
 }
+.file-tools {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.file-tools label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: #587262;
+}
+.file-tools .file-filter {
+  flex: 1 1 220px;
+}
+.file-tools select {
+  min-width: 120px;
+}
+.sort-direction {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+}
 .file-selection,
 .selection-heading {
   display: flex;
@@ -1053,6 +1079,15 @@ progress {
   .selection-banner {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .file-tools .file-filter {
+    flex-basis: 100%;
+  }
+  .file-tools label:not(.file-filter) {
+    flex: 1;
+  }
+  .file-tools select {
+    min-width: 0;
   }
   .file-table .file-modified {
     display: none;

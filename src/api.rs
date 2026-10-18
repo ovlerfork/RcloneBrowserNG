@@ -251,6 +251,7 @@ async fn move_file(
         operation: Operation::Move,
         source: body.source,
         selected_folders: vec![],
+        selected_files: vec![],
         destination: body.destination,
         enabled: false,
         schedule: None,
@@ -330,6 +331,7 @@ async fn update_task(
             || old.input.source != input.source
             || old.input.destination != input.destination
             || old.input.selected_folders != input.selected_folders
+            || old.input.selected_files != input.selected_files
             || old.input.options.exclude != input.options.exclude)
     {
         return Err(ApiError::conflict(

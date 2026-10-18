@@ -10,6 +10,7 @@ export interface TaskInput {
   operation: Operation;
   source: string;
   selected_folders: string[];
+  selected_files: string[];
   destination: string;
   enabled: boolean;
   schedule: string | null;
@@ -29,6 +30,7 @@ export interface Run {
   operation: Operation;
   source: string;
   selected_folders: string[];
+  selected_files: string[];
   destination: string;
   dry_run: boolean;
   resync: boolean;
@@ -92,6 +94,7 @@ export const blankTask = (): TaskInput => ({
   operation: "copy",
   source: "",
   selected_folders: [],
+  selected_files: [],
   destination: "",
   enabled: false,
   schedule: null,
@@ -105,6 +108,7 @@ export function taskInput(task: Task): TaskInput {
     operation,
     source,
     selected_folders = [],
+    selected_files = [],
     destination,
     enabled,
     schedule,
@@ -117,6 +121,7 @@ export function taskInput(task: Task): TaskInput {
     operation,
     source,
     selected_folders,
+    selected_files,
     destination,
     enabled,
     schedule,
