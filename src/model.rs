@@ -77,11 +77,6 @@ impl TaskInput {
         }
         validate_path(&self.source)?;
         validate_path(&self.destination)?;
-        if self.operation == Operation::Bisync && !self.selected_folders.is_empty() {
-            bail!(
-                "folder selections support copy, sync, and move; bisync requires a single source"
-            );
-        }
         if paths_overlap(&self.source, &self.destination) {
             bail!("source and destination must not be the same path or contain one another");
         }

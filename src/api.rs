@@ -329,6 +329,7 @@ async fn update_task(
         && (old.input.operation != input.operation
             || old.input.source != input.source
             || old.input.destination != input.destination
+            || old.input.selected_folders != input.selected_folders
             || old.input.options.exclude != input.options.exclude)
     {
         return Err(ApiError::conflict(
