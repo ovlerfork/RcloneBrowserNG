@@ -145,6 +145,26 @@ impl Service {
         let mut body = json!({"_async":true,"_group":group,
             "_config":{"DryRun":run.dry_run,"Transfers":run.options.transfers,"Checkers":run.options.checkers},
             "_filter":{"ExcludeRule":run.options.exclude}});
+        if !run.selected_folders.is_empty() {
+            let mut rules: Vec<_> = run
+                .options
+                .exclude
+                .iter()
+                .map(|pattern| format!("- {pattern}"))
+                .collect();
+            for name in &run.selected_folders {
+                let mut literal = String::new();
+                for character in name.chars() {
+                    if matches!(character, '\\' | '*' | '?' | '[' | ']' | '{' | '}') {
+                        literal.push('\\');
+                    }
+                    literal.push(character);
+                }
+                rules.push(format!("+ /{literal}/**"));
+            }
+            rules.push("- **".into());
+            body["_filter"] = json!({"FilterRule":rules});
+        }
         let endpoint;
         if run.operation == Operation::Bisync {
             let directory = self.config.data_dir.join("bisync").join(

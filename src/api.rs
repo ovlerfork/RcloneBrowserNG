@@ -60,6 +60,7 @@ pub fn router(service: Arc<Service>) -> Router {
         .route("/api/files/mkdir", post(mkdir))
         .route("/api/files/delete", post(delete_file))
         .route("/api/files/move", post(move_file))
+        .route("/api/transfers", post(create_transfer))
         .route("/api/tasks", get(tasks).post(create_task))
         .route(
             "/api/tasks/{id}",
@@ -249,6 +250,7 @@ async fn move_file(
         name: "File move".into(),
         operation: Operation::Move,
         source: body.source,
+        selected_folders: vec![],
         destination: body.destination,
         enabled: false,
         schedule: None,
@@ -256,7 +258,29 @@ async fn move_file(
         destructive_confirmed: true,
         options: TaskOptions::default(),
     };
+    queue_transfer(&service, input, !body.is_dir)
+}
+async fn create_transfer(
+    State(service): App,
+    Json(input): Json<TaskInput>,
+) -> ApiResult<(StatusCode, Json<Run>)> {
+    if input.schedule.is_some() {
+        return Err(ApiError::bad("save a task to use a schedule"));
+    }
+    if input.operation == Operation::Bisync {
+        return Err(ApiError::bad(
+            "bisync requires a saved task and explicit initialization",
+        ));
+    }
+    queue_transfer(&service, input, false)
+}
+fn queue_transfer(
+    service: &Service,
+    input: TaskInput,
+    single_file: bool,
+) -> ApiResult<(StatusCode, Json<Run>)> {
     input.validate().map_err(ApiError::bad)?;
+    let dry_run = input.dry_run;
     let now = chrono::Utc::now();
     let mut run = Run::new(
         &Task {
@@ -266,11 +290,11 @@ async fn move_file(
             updated_at: now,
         },
         "manual",
-        false,
+        dry_run,
         false,
     );
     run.task_id = None;
-    run.single_file = !body.is_dir;
+    run.single_file = single_file;
     service.store.enqueue_run(&run)?;
     service.notify.notify_waiters();
     Ok((StatusCode::ACCEPTED, Json(run)))

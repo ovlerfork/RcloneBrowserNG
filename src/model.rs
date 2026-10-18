@@ -52,6 +52,8 @@ pub struct TaskInput {
     pub name: String,
     pub operation: Operation,
     pub source: String,
+    #[serde(default)]
+    pub selected_folders: Vec<String>,
     pub destination: String,
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -75,6 +77,11 @@ impl TaskInput {
         }
         validate_path(&self.source)?;
         validate_path(&self.destination)?;
+        if self.operation == Operation::Bisync && !self.selected_folders.is_empty() {
+            bail!(
+                "folder selections support copy, sync, and move; bisync requires a single source"
+            );
+        }
         if paths_overlap(&self.source, &self.destination) {
             bail!("source and destination must not be the same path or contain one another");
         }
@@ -161,6 +168,8 @@ pub struct Run {
     pub task_name: String,
     pub operation: Operation,
     pub source: String,
+    #[serde(default)]
+    pub selected_folders: Vec<String>,
     pub destination: String,
     pub dry_run: bool,
     pub resync: bool,
@@ -187,6 +196,7 @@ impl Run {
             task_name: task.input.name.clone(),
             operation: task.input.operation.clone(),
             source: task.input.source.clone(),
+            selected_folders: task.input.selected_folders.clone(),
             destination: task.input.destination.clone(),
             dry_run,
             resync,
