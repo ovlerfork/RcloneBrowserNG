@@ -54,7 +54,6 @@ export function Files({
   );
   const selectAll = useRef<HTMLInputElement>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [query, setQuery] = useState("");
   const [entryType, setEntryType] = useState("all");
   const [sortBy, setSortBy] = useState("name");
   const [ascending, setAscending] = useState(true);
@@ -97,12 +96,10 @@ export function Files({
   const trail = crumbs(path);
   const selectable = picker?.field !== "destination";
   const visibleEntries = entries
-    .filter(
-      (entry) =>
-        entry.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()) &&
-        (selectable
-          ? entryType === "all" || entry.is_dir === (entryType === "folders")
-          : entry.is_dir),
+    .filter((entry) =>
+      selectable
+        ? entryType === "all" || entry.is_dir === (entryType === "folders")
+        : entry.is_dir,
     )
     .sort((a, b) => {
       const compared =
@@ -259,18 +256,9 @@ export function Files({
           </button>
         ))}
       </nav>
-      <div className="file-tools">
-        <label className="file-filter">
-          Filter by name
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search this folder"
-          />
-        </label>
-        {selectable && (
-          <label>
+      {selectable && (
+        <div className="file-selection">
+          <label className="file-type">
             Type
             <select
               value={entryType}
@@ -281,28 +269,6 @@ export function Files({
               <option value="folders">Folders</option>
             </select>
           </label>
-        )}
-        <label>
-          Sort by
-          <select
-            value={sortBy}
-            onChange={(event) => setSortBy(event.target.value)}
-          >
-            <option value="name">Name</option>
-            {selectable && <option value="size">Size</option>}
-            <option value="modified">Modified</option>
-          </select>
-        </label>
-        <button
-          className="sort-direction"
-          title={ascending ? "Sort descending" : "Sort ascending"}
-          onClick={() => setAscending(!ascending)}
-        >
-          {ascending ? <ArrowUp size={18} /> : <ArrowDown size={18} />}
-        </button>
-      </div>
-      {selectable && (
-        <div className="file-selection">
           <span aria-live="polite">
             {selected.length} items selected
             {!loading && hiddenSelected > 0 && (
@@ -365,9 +331,42 @@ export function Files({
                     />
                   </th>
                 )}
-                <th>Name</th>
-                <th className="file-size">Size</th>
-                <th className="file-modified">Modified</th>
+                {[
+                  { key: "name", label: "Name" },
+                  { key: "size", label: "Size" },
+                  { key: "modified", label: "Modified" },
+                ].map((column) => (
+                  <th
+                    key={column.key}
+                    scope="col"
+                    className={
+                      column.key === "name" ? undefined : `file-${column.key}`
+                    }
+                    aria-sort={
+                      sortBy === column.key
+                        ? ascending
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    <button
+                      className="column-sort"
+                      onClick={() => {
+                        setAscending(sortBy === column.key ? !ascending : true);
+                        setSortBy(column.key);
+                      }}
+                    >
+                      {column.label}
+                      {sortBy === column.key &&
+                        (ascending ? (
+                          <ArrowUp size={14} />
+                        ) : (
+                          <ArrowDown size={14} />
+                        ))}
+                    </button>
+                  </th>
+                ))}
                 {!picker && <th aria-label="Actions" />}
               </tr>
             </thead>

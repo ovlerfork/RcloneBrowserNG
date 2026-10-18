@@ -752,31 +752,15 @@ progress {
   display: flex;
   gap: 6px;
 }
-.file-tools {
+.file-type,
+.dialog .file-type {
   display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 18px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
-.file-tools label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  font-size: 12px;
-  color: #587262;
-}
-.file-tools .file-filter {
-  flex: 1 1 220px;
-}
-.file-tools select {
-  min-width: 120px;
-}
-.sort-direction {
-  width: 40px;
-  height: 40px;
-  padding: 0;
+.file-type select {
+  width: auto;
 }
 .file-selection,
 .selection-heading {
@@ -791,6 +775,26 @@ progress {
 }
 .file-table {
   table-layout: fixed;
+  min-width: 560px;
+}
+.file-table th[aria-sort] {
+  padding: 0;
+}
+.column-sort {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 13px 18px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+}
+.column-sort svg {
+  flex-shrink: 0;
+}
+.file-table th[aria-sort="ascending"],
+.file-table th[aria-sort="descending"] {
+  color: #236b51;
 }
 .file-table .selection-cell {
   width: 46px;
@@ -1080,20 +1084,14 @@ progress {
     align-items: flex-start;
     flex-direction: column;
   }
-  .file-tools .file-filter {
-    flex-basis: 100%;
-  }
-  .file-tools label:not(.file-filter) {
-    flex: 1;
-  }
-  .file-tools select {
-    min-width: 0;
+  .column-sort {
+    padding: 12px;
   }
   .file-table .file-modified {
-    display: none;
+    width: 155px;
   }
   .file-table .file-size {
-    width: 65px;
+    width: 80px;
   }
   .file-table .selection-cell {
     width: 36px;
